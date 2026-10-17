@@ -335,6 +335,8 @@
       const hasChosenWrong = g.items.some(function (it) { return it.orig === chosenOrig && it.orig !== q.a; });
       let body = "";
       const quotes = [];
+      const many = g.items.length > 1;
+      // 각 선지의 근거(강의노트 원문)는 그 선지 해설 바로 아래에 둔다
       g.items.forEach(function (it) {
         const ex = q.e[it.orig];
         const isCorrect = it.orig === q.a;
@@ -344,18 +346,14 @@
         body += '<div class="ex-item' + (isCorrect ? " is-correct" : (isChosen ? " is-chosen-wrong" : "")) + '">' +
           '<div class="ex-head">' + CIRCLED[it.di] + " " + pills + "</div>" +
           '<div class="ex-opt">' + fmt(q.o[it.orig]) + "</div>" +
-          '<div class="ex-why">' + fmt(ex[0]) + "</div></div>";
-        const same = quotes.filter(function (x) { return x.text === ex[2]; })[0];
-        if (same) same.nums.push(CIRCLED[it.di]); else quotes.push({ text: ex[2], nums: [CIRCLED[it.di]] });
-      });
-      const many = g.items.length > 1;
-      quotes.forEach(function (x) {
-        body += '<blockquote class="ex-quote"><span class="src">강의노트 ' + esc(g.ref.long) +
-          (many ? " · " + x.nums.join("") + " 근거" : "") + "</span>" + fmt(x.text) + "</blockquote>";
+          '<div class="ex-why">' + fmt(ex[0]) + "</div>" +
+          '<blockquote class="ex-quote"><span class="src">강의노트 ' + esc(g.ref.long) + (many ? " · " + CIRCLED[it.di] + " 근거" : "") + "</span>" +
+            fmt(ex[2]) + "</blockquote></div>";
+        if (quotes.indexOf(ex[2]) < 0) quotes.push(ex[2]);
       });
       html += '<div class="ex' + (many ? " grouped" : "") + (hasCorrect ? " is-correct" : (hasChosenWrong ? " is-chosen-wrong" : "")) + '">' +
         "<div>" + body + "</div>" +
-        thumbHTML(g.ref, g.ref.long + " — " + quotes.map(function (x) { return x.text; }).join(" / ")) +
+        thumbHTML(g.ref, g.ref.long + " — " + quotes.join(" / ")) +
         "</div>";
     });
     return html + "</div>";

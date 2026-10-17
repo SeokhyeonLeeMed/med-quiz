@@ -331,5 +331,5 @@ body.locked .topbar { display: none; }
 .ex.grouped .ex-item { padding-left: 10px; border-left: 3px solid transparent; }
 .ex.grouped .ex-item.is-correct { border-left-color: var(--ok); }
 .ex.grouped .ex-item.is-chosen-wrong { border-left-color: var(--bad); }
-.ex.grouped .ex-quote { margin-top: 10px; }
+.ex.grouped .ex-quote { margin-top: 8px; }
 .ex-quote + .ex-quote { margin-top: 6px; }
