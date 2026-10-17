@@ -42,6 +42,41 @@
     }
     return imgCache[p];
   };
+  // 새 배포가 있으면 다시 불러온다(브라우저가 예전 index.html을 최대 10분 캐시하므로)
+  function myVersion() {
+    const s = document.querySelector('script[src*="app.js?v="]');
+    const m = s && s.getAttribute("src").match(/v=([0-9a-f]+)/);
+    return m ? m[1] : "";
+  }
+  async function latestVersion() {
+    const r = await fetch("index.html?t=" + Date.now(), { cache: "no-store" });
+    const m = (await r.text()).match(/app\.js\?v=([0-9a-f]+)/);
+    return m ? m[1] : "";
+  }
+  async function reloadFresh() {
+    try { await fetch("index.html", { cache: "reload" }); } catch (e) { /* ignore */ }
+    location.reload();
+  }
+  async function checkUpdate(onBoot) {
+    let v;
+    try { v = await latestVersion(); } catch (e) { return; }
+    if (!v || v === myVersion()) return;
+    let tried = null;
+    try { tried = sessionStorage.getItem("mq_reload_for"); } catch (e) { /* ignore */ }
+    if (tried === v) return;                       // 다시 불러와도 그대로면 반복하지 않는다
+    try { sessionStorage.setItem("mq_reload_for", v); } catch (e) { /* ignore */ }
+    if (onBoot || !document.querySelector(".qcard")) return reloadFresh();
+    if (document.getElementById("updBtn")) return;
+    const b = document.createElement("button");
+    b.id = "updBtn"; b.type = "button"; b.className = "sync-chip upd";
+    b.textContent = "새 버전 — 다시 불러오기";
+    b.onclick = reloadFresh;
+    const nav = document.querySelector(".topnav");
+    if (nav) nav.insertBefore(b, nav.firstChild);
+  }
+  checkUpdate(true);
+  document.addEventListener("visibilitychange", function () { if (!document.hidden) checkUpdate(false); });
+
   window.QUIZ_LOCK = function () {
     try { localStorage.removeItem(LS); } catch (e) { /* ignore */ }
     location.reload();

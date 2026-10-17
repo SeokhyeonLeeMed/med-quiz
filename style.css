@@ -333,3 +333,5 @@ body.locked .topbar { display: none; }
 .ex.grouped .ex-item.is-chosen-wrong { border-left-color: var(--bad); }
 .ex.grouped .ex-quote { margin-top: 8px; }
 .ex-quote + .ex-quote { margin-top: 6px; }
+
+.sync-chip.upd { color: #fff; background: var(--accent); border-color: var(--accent); }
