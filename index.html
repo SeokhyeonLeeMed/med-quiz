@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#8b1e2d">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="강의 퀴즈">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.png">
+<title>의대 강의 퀴즈</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800&display=swap">
+<link rel="stylesheet" href="style.css?v=2c59e0442e">
+</head>
+<body>
+<div id="lock" class="lock" hidden>
+  <form class="card lock-card" id="lockForm" autocomplete="on">
+    <span class="brand-mark">KU</span>
+    <h1>의대 강의 퀴즈</h1>
+    <p class="sub">암호를 넣으면 이 기기에서는 다음부터 바로 열린다.</p>
+    <input type="text" name="username" value="med-quiz" autocomplete="username" hidden>
+    <input id="pw" name="password" type="password" autocomplete="current-password" placeholder="암호" required>
+    <button id="pwGo" class="btn primary" type="submit">열기</button>
+    <p class="hint" id="pwMsg"></p>
+  </form>
+</div>
+<header class="topbar">
+  <button class="brand" id="homeBtn" type="button">
+    <span class="brand-mark">KU</span>
+    <span class="brand-text">의대 강의 퀴즈<small id="brandSub">강의노트·기출 기반</small></span>
+  </button>
+  <nav class="topnav">
+    <button type="button" id="syncChip" class="sync-chip" hidden>☁</button>
+    <button type="button" id="navHome" class="navbtn">퀴즈 선택</button>
+    <button type="button" id="navHistory" class="navbtn">기록·진도</button>
+  </nav>
+</header>
+
+<main id="app"><p class="sub">불러오는 중…</p></main>
+
+<div id="lightbox" class="lightbox" hidden>
+  <div class="lb-inner">
+    <button type="button" class="lb-close" id="lbClose" aria-label="닫기">✕</button>
+    <img id="lbImg" alt="">
+    <div class="lb-cap" id="lbCap"></div>
+  </div>
+</div>
+
+<script src="boot.js?v=a3ff9ba84d"></script>
+<script src="app.js?v=c3bb1d111c"></script>
+</body>
+</html>
