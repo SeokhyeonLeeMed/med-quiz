@@ -322,24 +322,40 @@
     const q = r.q;
     let html = "";
     if (q.c) html += '<div class="concept"><b>기본 개념</b>' + fmt(q.c) + "</div>";
-    html += '<div class="ex-list">';
+    // 근거 슬라이드가 같은 선지는 한 칸으로 묶고 사진은 하나만 보여 준다
+    const groups = [], bySrc = {};
     order.forEach(function (orig, di) {
-      const ex = q.e[orig];
-      const isCorrect = orig === q.a;
-      const isChosen = orig === chosenOrig;
-      const ref = refInfo(r.quiz, ex[1]);
-      const cls = isCorrect ? "is-correct" : (isChosen ? "is-chosen-wrong" : "");
-      let pills = isCorrect ? '<span class="pill ok">정답</span>' : '<span class="pill bad">오답</span>';
-      if (isChosen) pills += '<span class="pill mine">내 선택</span>';
-      html +=
-        '<div class="ex ' + cls + '">' +
-          "<div>" +
-            '<div class="ex-head">' + CIRCLED[di] + " " + pills + "</div>" +
-            '<div class="ex-opt">' + fmt(q.o[orig]) + "</div>" +
-            '<div class="ex-why">' + fmt(ex[0]) + "</div>" +
-            '<blockquote class="ex-quote"><span class="src">강의노트 ' + esc(ref.long) + "</span>" + fmt(ex[2]) + "</blockquote>" +
-          "</div>" +
-          thumbHTML(ref, ref.long + " — " + ex[2]) +
+      const ref = refInfo(r.quiz, q.e[orig][1]);
+      if (!bySrc[ref.src]) { bySrc[ref.src] = { ref: ref, items: [] }; groups.push(bySrc[ref.src]); }
+      bySrc[ref.src].items.push({ orig: orig, di: di });
+    });
+    html += '<div class="ex-list">';
+    groups.forEach(function (g) {
+      const hasCorrect = g.items.some(function (it) { return it.orig === q.a; });
+      const hasChosenWrong = g.items.some(function (it) { return it.orig === chosenOrig && it.orig !== q.a; });
+      let body = "";
+      const quotes = [];
+      g.items.forEach(function (it) {
+        const ex = q.e[it.orig];
+        const isCorrect = it.orig === q.a;
+        const isChosen = it.orig === chosenOrig;
+        let pills = isCorrect ? '<span class="pill ok">정답</span>' : '<span class="pill bad">오답</span>';
+        if (isChosen) pills += '<span class="pill mine">내 선택</span>';
+        body += '<div class="ex-item' + (isCorrect ? " is-correct" : (isChosen ? " is-chosen-wrong" : "")) + '">' +
+          '<div class="ex-head">' + CIRCLED[it.di] + " " + pills + "</div>" +
+          '<div class="ex-opt">' + fmt(q.o[it.orig]) + "</div>" +
+          '<div class="ex-why">' + fmt(ex[0]) + "</div></div>";
+        const same = quotes.filter(function (x) { return x.text === ex[2]; })[0];
+        if (same) same.nums.push(CIRCLED[it.di]); else quotes.push({ text: ex[2], nums: [CIRCLED[it.di]] });
+      });
+      const many = g.items.length > 1;
+      quotes.forEach(function (x) {
+        body += '<blockquote class="ex-quote"><span class="src">강의노트 ' + esc(g.ref.long) +
+          (many ? " · " + x.nums.join("") + " 근거" : "") + "</span>" + fmt(x.text) + "</blockquote>";
+      });
+      html += '<div class="ex' + (many ? " grouped" : "") + (hasCorrect ? " is-correct" : (hasChosenWrong ? " is-chosen-wrong" : "")) + '">' +
+        "<div>" + body + "</div>" +
+        thumbHTML(g.ref, g.ref.long + " — " + quotes.map(function (x) { return x.text; }).join(" / ")) +
         "</div>";
     });
     return html + "</div>";

@@ -325,3 +325,11 @@ body.locked .topbar { display: none; }
 @supports (padding: env(safe-area-inset-top)) {
   .topbar { padding-top: max(10px, env(safe-area-inset-top)); }
 }
+
+/* 같은 슬라이드로 묶인 해설 */
+.ex-item + .ex-item { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); }
+.ex.grouped .ex-item { padding-left: 10px; border-left: 3px solid transparent; }
+.ex.grouped .ex-item.is-correct { border-left-color: var(--ok); }
+.ex.grouped .ex-item.is-chosen-wrong { border-left-color: var(--bad); }
+.ex.grouped .ex-quote { margin-top: 10px; }
+.ex-quote + .ex-quote { margin-top: 6px; }
