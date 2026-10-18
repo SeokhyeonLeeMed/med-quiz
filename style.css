@@ -159,6 +159,7 @@ h2 { font-size: 19px; margin: 28px 0 12px; }
   display: grid; grid-template-columns: 1fr 210px; gap: 14px;
   padding: 12px 14px; border-radius: 11px; border: 1px solid var(--line); background: var(--surface);
 }
+.ex.noimg { grid-template-columns: 1fr; }
 .ex.is-correct { border-color: var(--ok); }
 .ex.is-chosen-wrong { border-color: var(--bad); }
 .ex-head { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 14px; margin-bottom: 4px; flex-wrap: wrap; }

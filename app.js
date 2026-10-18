@@ -322,12 +322,15 @@
     const q = r.q;
     let html = "";
     if (q.c) html += '<div class="concept"><b>기본 개념</b>' + fmt(q.c) + "</div>";
-    // 근거 슬라이드가 같은 선지는 한 칸으로 묶고 사진은 하나만 보여 준다
+    // 근거 슬라이드가 같은 선지는 한 칸으로 묶고 사진은 하나만 보여 준다.
+    // 슬라이드 사진이 없는 과목(noImg)은 선지마다 따로 두고 원문 인용만 보여 준다
+    const noImg = !!r.quiz.noImg;
     const groups = [], bySrc = {};
     order.forEach(function (orig, di) {
       const ref = refInfo(r.quiz, q.e[orig][1]);
-      if (!bySrc[ref.src]) { bySrc[ref.src] = { ref: ref, items: [] }; groups.push(bySrc[ref.src]); }
-      bySrc[ref.src].items.push({ orig: orig, di: di });
+      const gk = noImg ? "o" + orig : ref.src;
+      if (!bySrc[gk]) { bySrc[gk] = { ref: ref, items: [] }; groups.push(bySrc[gk]); }
+      bySrc[gk].items.push({ orig: orig, di: di });
     });
     html += '<div class="ex-list">';
     groups.forEach(function (g) {
@@ -351,9 +354,9 @@
             fmt(ex[2]) + "</blockquote></div>";
         if (quotes.indexOf(ex[2]) < 0) quotes.push(ex[2]);
       });
-      html += '<div class="ex' + (many ? " grouped" : "") + (hasCorrect ? " is-correct" : (hasChosenWrong ? " is-chosen-wrong" : "")) + '">' +
+      html += '<div class="ex' + (many ? " grouped" : "") + (noImg ? " noimg" : "") + (hasCorrect ? " is-correct" : (hasChosenWrong ? " is-chosen-wrong" : "")) + '">' +
         "<div>" + body + "</div>" +
-        thumbHTML(g.ref, g.ref.long + " — " + quotes.join(" / ")) +
+        (noImg ? "" : thumbHTML(g.ref, g.ref.long + " — " + quotes.join(" / "))) +
         "</div>";
     });
     return html + "</div>";
