@@ -626,10 +626,13 @@
       '<div class="progress"><i style="width:' + (doneN / total * 100) + '%"></i></div>' + dots +
       '<div class="card qcard">' +
         (showSrc ? '<div class="qsrc">' + esc((exam ? "기출 " : r.quiz.week + " · ") + r.quiz.title) + " · " + esc(qNumLabel(r)) +
+          (q.pf ? ' <span class="badge pf">출제 ' + esc(q.pf) + " 교수님</span>" : "") +
+          (q.alt ? ' <span class="badge alt">Claude 추가본</span>' : "") +
           (t === "multi" ? ' <span class="badge">' + answerSet(q).length + "개 고르기</span>" : "") +
           (t === "self" ? ' <span class="badge">스스로 채점</span>' : "") + "</div>" : "");
 
     if (exam) html += examStemHTML(r, num);
+    if (exam && q.notes && q.notes.length) html += '<div class="xnote">' + q.notes.map(function (n) { return "<div>" + fmt(n) + "</div>"; }).join("") + "</div>";
     else html += '<p class="qtext">' + num + ". " + fmt(stemOf(q.q)) + "</p>" + (bogiOf(q.q) ? '<div class="bogi">' + fmt(bogiOf(q.q)) + "</div>" : "");
 
     // 선지
