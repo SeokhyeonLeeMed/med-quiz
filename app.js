@@ -286,6 +286,48 @@
     return q.o.length > 0 && (q.o.every(function (o) { return /^[ㄱ-ㅎ](, [ㄱ-ㅎ])*$/.test(o); }) ||
       q.o.every(function (o) { return /^(I|II|III|IV)(, (I|II|III|IV))*$/.test(o); }));
   }
+  // 조합형 문항을 풀 때마다 새로 만든다(선지 순서 섞기가 켜져 있을 때): 보기 문장을 섞어 ㄱㄴㄷㄹ(I II III IV)을 다시 붙이고,
+  // 정답 조합이 정해지면 나머지 선지 4개는 정답을 뺀 모든 조합에서 무작위로 뽑아 개수 오름차순·글자 오름차순으로 정렬한다.
+  // 보기별 해설(sx)은 문장에 붙어 다니므로 글자만 바꾼다.
+  function makeVariant(q) {
+    if (!q.sx || !isComboQ(q)) return null;
+    const isKo = q.o.every(function (o) { return /^[ㄱ-ㅎ](, [ㄱ-ㅎ])*$/.test(o); });
+    const L = isKo ? ["ㄱ", "ㄴ", "ㄷ", "ㄹ"] : ["I", "II", "III", "IV"], N = L.length;
+    const stem = [], stm = [];
+    String(q.q).split(NL).forEach(function (l) {
+      const m = l.match(/^(ㄱ|ㄴ|ㄷ|ㄹ|IV|III|II|I)\. (.*)$/);
+      if (m) stm.push({ l: m[1], text: m[2] }); else if (!stm.length) stem.push(l);
+    });
+    if (stm.length !== N) return null;
+    const sxBy = {}; q.sx.forEach(function (x) { sxBy[x[0]] = x; });
+    if (!L.every(function (l) { return sxBy[l]; })) return null;
+    const corr = q.o[q.a].split(",").map(function (x) { return x.trim(); });
+    let perm = range(N);
+    for (let t = 0; t < 30; t++) { perm = shuffle(range(N)); if (perm.some(function (p, i) { return p !== i; })) break; }
+    const ns = perm.map(function (p, i) { return { l: L[i], old: L[p], text: stm[p].text }; });
+    const cm = ns.reduce(function (m, x, i) { return m | (corr.indexOf(x.old) >= 0 ? 1 << i : 0); }, 0);
+    const pool = []; for (let m = 1; m < (1 << N); m++) if (m !== cm) pool.push(m);
+    const masks = [cm].concat(shuffle(pool).slice(0, 4));
+    const idxs = function (m) { const r = []; for (let i = 0; i < N; i++) if (m & (1 << i)) r.push(i); return r; };
+    masks.sort(function (a, b) {
+      const A = idxs(a), B = idxs(b);
+      if (A.length !== B.length) return A.length - B.length;
+      for (let i = 0; i < A.length; i++) if (A[i] !== B[i]) return A[i] - B[i];
+      return 0;
+    });
+    return {
+      q: stem.concat(ns.map(function (x) { return x.l + ". " + x.text; })).join(NL),
+      o: masks.map(function (m) { return idxs(m).map(function (i) { return L[i]; }).join(", "); }),
+      a: masks.indexOf(cm),
+      sx: ns.map(function (x) { const o = sxBy[x.old]; return [x.l, o[1], o[2], o[3], o[4]]; })
+    };
+  }
+  // 세션(또는 응시 항목)에 저장된 변형을 입힌 문항
+  function qv(key, holder) {
+    const r = qByKey(key);
+    const v = r && holder && holder.variants && holder.variants[key];
+    return v ? { quiz: r.quiz, q: Object.assign({}, r.q, { q: v.q, o: v.o, a: v.a, sx: v.sx }), idx: r.idx } : r;
+  }
   function orderFor(r, k, n) {
     return isExam(r.quiz) || isComboQ(r.q) ? range(n) : (settings.shuffleOpts ? shuffle(range(n)) : fixedOrder(k, n));
   }
@@ -336,6 +378,8 @@
         repairDirty = true;
         delete s.answers[k]; delete s.sel[k]; delete s.reveal[k];
         s.orders[k] = orderFor(r, k, n);
+        s.variants = s.variants || {}; delete s.variants[k];
+        if (settings.shuffleOpts) { const v = makeVariant(r.q); if (v) s.variants[k] = v; }
       }
       // 아직 답하지 않은 조합형 문항은 정렬된 순서로 고정한다(예전에 섞여 저장된 순서를 바로잡는다)
       if (isComboQ(r.q) && s.answers[k] === undefined && s.orders[k].some(function (v, i) { return v !== i; })) { s.orders[k] = range(n); repairDirty = true; }
@@ -395,10 +439,13 @@
       session = ex; renderQuiz(); window.scrollTo({ top: 0 });
       return;
     }
-    const fp = {};
-    keys.forEach(function (k) { fp[k] = fpOf(k); });
+    const fp = {}, variants = {};
+    keys.forEach(function (k) {
+      fp[k] = fpOf(k);
+      if (settings.shuffleOpts) { const v = makeVariant(qByKey(k).q); if (v) variants[k] = v; }
+    });
     const now = Date.now();
-    session = { id: "s" + now + Math.random().toString(36).slice(2, 6), quizId: quizId, mode: mode, keys: keys, orders: orders, fp: fp, answers: {}, sel: {}, reveal: {}, pos: 0, start: now, upd: now, chk: now };
+    session = { id: "s" + now + Math.random().toString(36).slice(2, 6), quizId: quizId, mode: mode, keys: keys, orders: orders, fp: fp, variants: variants, answers: {}, sel: {}, reveal: {}, pos: 0, start: now, upd: now, chk: now };
     persist();
     renderQuiz();
     window.scrollTo({ top: 0 });
@@ -417,7 +464,7 @@
   function choose(displayIdx) {
     const key = session.keys[session.pos];
     if (session.answers[key] !== undefined) return;
-    const r = qByKey(key);
+    const r = qv(key, session);
     const orig = session.orders[key][displayIdx];
     const t = qType(r.q);
     if (t === "multi") {
@@ -465,9 +512,11 @@
 
   function finish() {
     const items = session.keys.map(function (k) {
-      const r = qByKey(k);
+      const r = qv(k, session);
       const ch = session.answers[k];
-      return { key: k, chosen: ch === undefined ? null : ch, order: session.orders[k], correct: isRight(r.q, ch) };
+      const it = { key: k, chosen: ch === undefined ? null : ch, order: session.orders[k], correct: isRight(r.q, ch) };
+      if (session.variants && session.variants[k]) it.variant = session.variants[k];
+      return it;
     });
     const attempt = {
       id: "a" + Date.now() + Math.random().toString(36).slice(2, 6),
@@ -488,8 +537,8 @@
   }
 
   // ---------- rendering: explanations ----------
-  function explanationHTML(key, order, chosenOrig) {
-    const r = qByKey(key);
+  function explanationHTML(key, order, chosenOrig, rOverride) {
+    const r = rOverride || qByKey(key);
     if (isExam(r.quiz)) return examExplanationHTML(r, chosenOrig);
     const q = r.q;
     let html = "";
@@ -736,7 +785,7 @@
     html += '<div class="card settings">' +
       '<label><input type="checkbox" id="setOpts"' + (settings.shuffleOpts ? " checked" : "") + "> 선지 순서 섞기</label>" +
       '<label><input type="checkbox" id="setQs"' + (settings.shuffleQs ? " checked" : "") + "> 문제 순서 섞기</label>" +
-      '<span class="hint">새로 시작하는 퀴즈부터 적용 · 기출과 조합형(ㄱㄴㄷㄹ)은 선지를 섞지 않는다</span></div>';
+      '<span class="hint">새로 시작하는 퀴즈부터 적용 · 기출은 선지를 섞지 않는다 · 조합형(ㄱㄴㄷㄹ)은 보기 순서를 바꾸고 틀린 선지를 새로 뽑아 개수·글자순으로 정렬한다</span></div>';
 
     if (subj) {
       const lq = lectureQuizzes(subj.id), eq = examQuizzes(subj.id);
@@ -769,7 +818,7 @@
     if (!sessionValid()) { session = null; return renderHome(); }
     setNav("");
     const key = session.keys[session.pos];
-    const r = qByKey(key);
+    const r = qv(key, session);
     const q = r.q;
     const exam = isExam(r.quiz);
     const t = qType(q);
@@ -782,11 +831,11 @@
     const subjName = SUBJ[subjectOf(session.quizId)] ? SUBJ[subjectOf(session.quizId)].name : "";
     const total = session.keys.length;
     const doneN = Object.keys(session.answers).length;
-    const correctN = session.keys.filter(function (k) { return session.answers[k] !== undefined && isRight(qByKey(k).q, session.answers[k]); }).length;
+    const correctN = session.keys.filter(function (k) { return session.answers[k] !== undefined && isRight(qv(k, session).q, session.answers[k]); }).length;
 
     const dots = '<div class="dots">' + session.keys.map(function (k, i) {
       const a = session.answers[k];
-      let c = a === undefined ? "" : (isRight(qByKey(k).q, a) ? "ok" : "bad");
+      let c = a === undefined ? "" : (isRight(qv(k, session).q, a) ? "ok" : "bad");
       if (i === session.pos) c += " cur";
       return '<span class="' + c + '" title="' + (i + 1) + '번"></span>';
     }).join("") + "</div>";
@@ -844,10 +893,10 @@
       const right = answerSet(q).map(function (o) { return CIRCLED[order.indexOf(o)]; }).join(", ");
       html += '<div class="verdict ' + (ok ? "ok" : "bad") + '" id="verdict">' +
         (ok ? "정답이다." : "틀렸다. 정답은 " + right + "번.") + "</div>" +
-        '<div class="explain">' + explanationHTML(key, order, chosen) + "</div>";
+        '<div class="explain">' + explanationHTML(key, order, chosen, r) + "</div>";
     }
     if (revealed) {
-      html += '<div class="explain" id="verdict">' + explanationHTML(key, order, null) + "</div>";
+      html += '<div class="explain" id="verdict">' + explanationHTML(key, order, null, r) + "</div>";
       html += answered
         ? '<div class="verdict ' + (chosen === "ok" ? "ok" : "bad") + '">스스로 채점: ' + (chosen === "ok" ? "맞혔다" : "틀렸다") + "</div>"
         : '<div class="selfgrade"><span>내 답은?</span><button class="btn" data-act="selfok">맞혔다</button><button class="btn" data-act="selfbad">틀렸다·모르겠다</button></div>';
@@ -887,9 +936,9 @@
   function reviewList(att) {
     if (att.legacy) return '<p class="empty">이전 버전 문항으로 푼 기록이라 점수만 남아 있다.</p>';
     return '<div class="stack">' + att.items.map(function (it, i) {
-      const r = qByKey(it.key);
+      const r = qv(it.key, it.variant ? { variants: { [it.key]: it.variant } } : null);
       if (!r) return "";
-      const stale = !!(r.q.rev && r.q.rev > att.ts);
+      const stale = !it.variant && !!(r.q.rev && r.q.rev > att.ts);
       const order = stale ? range(r.q.o.length) : (it.order || range(r.q.o.length));
       const exam = isExam(r.quiz);
       const rightTxt = exam ? fmt(r.q.h) : answerText(r, order, r.q.a);
@@ -899,7 +948,7 @@
           '<div class="ra">' + (exam || isMix(att.quizId) || att.mode === "wrong" ? esc(qNumLabel(r)) + " · " : "") +
             "내 답 " + (stale ? "(문항이 개정되어 예전 선택을 표시하지 못함)" : answerText(r, order, it.chosen)) +
             (it.correct ? "" : " · 정답 " + rightTxt) + "</div></div></summary>" +
-        '<div class="explain">' + explanationHTML(it.key, order, stale ? null : it.chosen) + "</div>" +
+        '<div class="explain">' + explanationHTML(it.key, order, stale ? null : it.chosen, r) + "</div>" +
       "</details>";
     }).join("") + "</div>";
   }
