@@ -281,6 +281,14 @@
   let session = null;     // 지금 푸는 세션
   let repairDirty = false;
 
+  // 조합형(ㄱㄴㄷㄹ·I II III IV) 선지는 개수→글자 오름차순으로 저장되어 있으므로 섞지 않고 저장된 순서대로 보인다
+  function isComboQ(q) {
+    return q.o.length > 0 && (q.o.every(function (o) { return /^[ㄱ-ㅎ](, [ㄱ-ㅎ])*$/.test(o); }) ||
+      q.o.every(function (o) { return /^(I|II|III|IV)(, (I|II|III|IV))*$/.test(o); }));
+  }
+  function orderFor(r, k, n) {
+    return isExam(r.quiz) || isComboQ(r.q) ? range(n) : (settings.shuffleOpts ? shuffle(range(n)) : fixedOrder(k, n));
+  }
   function fpOf(key) {
     const r = qByKey(key);
     if (!r) return "";
@@ -327,8 +335,10 @@
         if (s.answers[k] !== undefined) s.redo = (s.redo || 0) + 1;
         repairDirty = true;
         delete s.answers[k]; delete s.sel[k]; delete s.reveal[k];
-        s.orders[k] = isExam(r.quiz) ? range(n) : (settings.shuffleOpts ? shuffle(range(n)) : fixedOrder(k, n));
+        s.orders[k] = orderFor(r, k, n);
       }
+      // 아직 답하지 않은 조합형 문항은 정렬된 순서로 고정한다(예전에 섞여 저장된 순서를 바로잡는다)
+      if (isComboQ(r.q) && s.answers[k] === undefined && s.orders[k].some(function (v, i) { return v !== i; })) { s.orders[k] = range(n); repairDirty = true; }
       s.fp[k] = cur;
     });
     s.dropped = (s.dropped || 0) + (s.keys.length - keys.length);
@@ -373,8 +383,8 @@
     keys.forEach(function (k) {
       const r = qByKey(k);
       const n = r.q.o.length;
-      // 기출은 해설이 ①②… 번호로 선지를 가리키므로 원래 순서를 지킨다
-      orders[k] = isExam(r.quiz) ? range(n) : (settings.shuffleOpts ? shuffle(range(n)) : fixedOrder(k, n));
+      // 기출은 해설이 ①②… 번호로 선지를 가리키고, 조합형은 개수·글자 순으로 정렬해 두었으므로 원래 순서를 지킨다
+      orders[k] = orderFor(r, k, n);
     });
     // 같은 퀴즈를 풀던 기록이 있으면 이어 풀지 묻는다(새로 시작해도 풀던 기록은 목록에 남는다)
     const ex = sessionList().filter(function (s) {
@@ -726,7 +736,7 @@
     html += '<div class="card settings">' +
       '<label><input type="checkbox" id="setOpts"' + (settings.shuffleOpts ? " checked" : "") + "> 선지 순서 섞기</label>" +
       '<label><input type="checkbox" id="setQs"' + (settings.shuffleQs ? " checked" : "") + "> 문제 순서 섞기</label>" +
-      '<span class="hint">새로 시작하는 퀴즈부터 적용 · 기출은 해설이 선지 번호를 가리켜 선지를 섞지 않는다</span></div>';
+      '<span class="hint">새로 시작하는 퀴즈부터 적용 · 기출과 조합형(ㄱㄴㄷㄹ)은 선지를 섞지 않는다</span></div>';
 
     if (subj) {
       const lq = lectureQuizzes(subj.id), eq = examQuizzes(subj.id);
