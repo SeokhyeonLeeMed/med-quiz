@@ -42,6 +42,10 @@
     meta: "mq_meta_v1",
     settings: "mq_settings_v1",
     current: "mq_current_v1",
+    sessions: "mq_sessions_v1",      // 풀던 퀴즈들 {세션 id: 세션}
+    sessDel: "mq_sessions_del_v1",   // 지운 세션 {id: 시각} (다른 기기에서 되살아나지 않게)
+    histMirror: "mq_history_mirror_v1",
+    sessMirror: "mq_sessions_mirror_v1",
     oldHist: "bcq_history_v1",
     oldCurrent: "bcq_current_v1"
   };
@@ -57,8 +61,73 @@
   function remove(k) { try { localStorage.removeItem(k); } catch (e) { /* ignore */ } }
   let settings = Object.assign({ shuffleOpts: true, shuffleQs: false, grade: null, subject: null }, load(KEY.settings, {}));
   function saveSettings() { save(KEY.settings, settings); }
-  function history() { return load(KEY.hist, []); }
   function localMeta() { return load(KEY.meta, { resetAt: 0 }); }
+
+  // ---------- 기록·진행 보존 ----------
+  // 응시 기록과 풀던 퀴즈는 localStorage 한 곳에만 두지 않는다: 같은 내용을 복사본 키와 IndexedDB에도 쓰고,
+  // 주 저장소가 비었거나 깨졌거나 줄어들면 복사본에서 되살린다. (GitHub 동기화가 켜져 있으면 거기서도 가져온다)
+  const IDB = (function () {
+    let dbp = null;
+    function open() {
+      if (dbp) return dbp;
+      dbp = new Promise(function (res, rej) {
+        try {
+          const rq = indexedDB.open("mq_store", 1);
+          rq.onupgradeneeded = function () { rq.result.createObjectStore("kv"); };
+          rq.onsuccess = function () { res(rq.result); };
+          rq.onerror = function () { rej(rq.error); };
+        } catch (e) { rej(e); }
+      });
+      return dbp;
+    }
+    function put(k, v) {
+      return open().then(function (db) {
+        return new Promise(function (res, rej) {
+          const tx = db.transaction("kv", "readwrite");
+          tx.objectStore("kv").put(JSON.stringify(v), k);
+          tx.oncomplete = res; tx.onerror = function () { rej(tx.error); };
+        });
+      }).catch(function () { /* IndexedDB를 못 쓰면 localStorage 복사본만 쓴다 */ });
+    }
+    function get(k) {
+      return open().then(function (db) {
+        return new Promise(function (res, rej) {
+          const rq = db.transaction("kv").objectStore("kv").get(k);
+          rq.onsuccess = function () { res(rq.result ? JSON.parse(rq.result) : null); };
+          rq.onerror = function () { rej(rq.error); };
+        });
+      }).catch(function () { return null; });
+    }
+    return { put: put, get: get };
+  })();
+
+  function rawHistory() {
+    let v = null;
+    try { v = localStorage.getItem(KEY.hist); } catch (e) { /* ignore */ }
+    let arr = null;
+    if (v) { try { arr = JSON.parse(v); } catch (e) { arr = null; } }
+    if (!Array.isArray(arr)) {
+      if (v) { try { localStorage.setItem("mq_history_corrupt_" + Date.now(), v); } catch (e) { /* ignore */ } }
+      const m = load(KEY.histMirror, null);
+      arr = Array.isArray(m) ? m : [];
+    }
+    return arr;
+  }
+  function history() { return rawHistory(); }
+  // 기록을 저장한다. 지우기·원격 초기화가 아니면 이미 있던 기록을 줄이지 않는다.
+  function saveHistory(h, allowShrink) {
+    let out = h;
+    if (!allowShrink) {
+      const cur = rawHistory();
+      if (cur.length > h.length) {
+        const map = {};
+        cur.concat(h).forEach(function (x) { if (x && x.id) map[x.id] = map[x.id] || x; });
+        out = Object.keys(map).map(function (k) { return map[k]; }).sort(function (x, y) { return x.ts - y.ts; });
+      }
+    }
+    save(KEY.hist, out); save(KEY.histMirror, out); IDB.put("hist", out);
+    return out;
+  }
 
   // 이전 버전(생화학실습 단일 사이트) 기록 옮기기: 점수만 보존, 문항이 바뀌어 문항별 기록은 버림
   function migrate() {
@@ -73,7 +142,7 @@
       h.push({ id: a.id, quizId: qid, mode: a.mode, ts: a.ts, durSec: a.durSec, score: a.score, total: a.total, items: [], legacy: true });
     });
     h.sort(function (x, y) { return x.ts - y.ts; });
-    save(KEY.hist, h);
+    saveHistory(h);
     remove(KEY.oldHist);
     remove(KEY.oldCurrent);
   }
@@ -205,7 +274,83 @@
   }
 
   // ---------- session ----------
-  let session = load(KEY.current, null);
+  // 풀던 퀴즈는 여러 개를 동시에 보관한다(새 퀴즈를 시작해도 이전 진행이 사라지지 않는다).
+  // 문항이 바뀌거나 사라져도 남은 문항의 진행은 살린다. GitHub 동기화가 켜져 있으면 다른 기기에서도 이어 풀 수 있다.
+  let sessions = {};      // id -> 세션
+  let sessDel = {};       // id -> 지운 시각
+  let session = null;     // 지금 푸는 세션
+  let repairDirty = false;
+
+  function fpOf(key) {
+    const r = qByKey(key);
+    if (!r) return "";
+    const s = JSON.stringify([r.q.q, r.q.o]);
+    let h = 5381;
+    for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+    return (h >>> 0).toString(36);
+  }
+  function saveSessions() {
+    save(KEY.sessions, sessions); save(KEY.sessMirror, sessions); save(KEY.sessDel, sessDel);
+    // 비어 있는 상태로 IndexedDB 복사본을 덮어쓰지 않는다(복구 전에 지워지는 것을 막는다)
+    if (Object.keys(sessions).length || Object.keys(sessDel).length) IDB.put("sessions", { sessions: sessions, del: sessDel });
+  }
+  function loadSessions() {
+    let m = load(KEY.sessions, null);
+    if (!m || typeof m !== "object" || Array.isArray(m)) m = load(KEY.sessMirror, null);
+    if (!m || typeof m !== "object" || Array.isArray(m)) m = {};
+    const old = load(KEY.current, null);   // 예전 방식(하나만 저장)에서 옮기기
+    if (old && old.keys) {
+      old.id = old.id || ("s" + (old.start || Date.now()));
+      old.upd = old.upd || old.start || Date.now();
+      if (!m[old.id]) m[old.id] = old;
+    }
+    remove(KEY.current);
+    sessions = m; sessDel = load(KEY.sessDel, {});
+    saveSessions();
+  }
+  // 문항이 사라졌거나 바뀐 세션을 고친다: 남은 문항의 답은 살리고, 바뀐 문항은 답을 비워 다시 풀게 한다
+  function repairSession(s) {
+    if (!s || !Array.isArray(s.keys)) return null;
+    s.answers = s.answers || {}; s.sel = s.sel || {}; s.reveal = s.reveal || {}; s.orders = s.orders || {}; s.fp = s.fp || {};
+    const keys = s.keys.filter(function (k) { return qByKey(k); });
+    s.keys.forEach(function (k) {
+      if (keys.indexOf(k) < 0) { delete s.answers[k]; delete s.sel[k]; delete s.reveal[k]; delete s.orders[k]; delete s.fp[k]; }
+    });
+    if (keys.length !== s.keys.length) repairDirty = true;
+    if (!keys.length) return null;
+    const chk = s.chk || s.start || 0;
+    keys.forEach(function (k) {
+      const r = qByKey(k), n = r.q.o.length, cur = fpOf(k);
+      const stale = (s.fp[k] && s.fp[k] !== cur) || (r.q.rev && r.q.rev > chk);
+      const badOrder = !Array.isArray(s.orders[k]) || s.orders[k].length !== n;
+      if (stale || badOrder) {
+        if (s.answers[k] !== undefined) s.redo = (s.redo || 0) + 1;
+        repairDirty = true;
+        delete s.answers[k]; delete s.sel[k]; delete s.reveal[k];
+        s.orders[k] = isExam(r.quiz) ? range(n) : (settings.shuffleOpts ? shuffle(range(n)) : fixedOrder(k, n));
+      }
+      s.fp[k] = cur;
+    });
+    s.dropped = (s.dropped || 0) + (s.keys.length - keys.length);
+    s.keys = keys;
+    s.pos = Math.max(0, Math.min(s.pos || 0, keys.length - 1));
+    s.chk = Date.now();
+    return s;
+  }
+  function sessionList() {
+    const out = [];
+    Object.keys(sessions).forEach(function (id) {
+      const s = repairSession(sessions[id]);
+      if (s) { s.id = id; out.push(s); }
+    });
+    out.sort(function (a, b) { return (b.upd || 0) - (a.upd || 0); });
+    if (repairDirty) { repairDirty = false; saveSessions(); }
+    return out;
+  }
+  function dropSession(id) {
+    delete sessions[id]; sessDel[id] = Date.now();
+    saveSessions(); Sync.progressDirty();
+  }
 
   function startQuiz(quizId, mode) {
     let keys;
@@ -231,16 +376,33 @@
       // 기출은 해설이 ①②… 번호로 선지를 가리키므로 원래 순서를 지킨다
       orders[k] = isExam(r.quiz) ? range(n) : (settings.shuffleOpts ? shuffle(range(n)) : fixedOrder(k, n));
     });
-    session = { quizId: quizId, mode: mode, keys: keys, orders: orders, answers: {}, sel: {}, reveal: {}, pos: 0, start: Date.now() };
-    save(KEY.current, session);
+    // 같은 퀴즈를 풀던 기록이 있으면 이어 풀지 묻는다(새로 시작해도 풀던 기록은 목록에 남는다)
+    const ex = sessionList().filter(function (s) {
+      const n = Object.keys(s.answers).length;
+      return s.quizId === quizId && s.mode === mode && n > 0 && n < s.keys.length;
+    })[0];
+    if (ex && confirm("이 퀴즈를 풀던 기록이 있다 (" + Object.keys(ex.answers).length + "/" + ex.keys.length + " 답함)." + NL + NL + "확인 = 이어 풀기" + NL + "취소 = 새로 시작 (풀던 기록은 홈 화면에 남는다)")) {
+      session = ex; renderQuiz(); window.scrollTo({ top: 0 });
+      return;
+    }
+    const fp = {};
+    keys.forEach(function (k) { fp[k] = fpOf(k); });
+    const now = Date.now();
+    session = { id: "s" + now + Math.random().toString(36).slice(2, 6), quizId: quizId, mode: mode, keys: keys, orders: orders, fp: fp, answers: {}, sel: {}, reveal: {}, pos: 0, start: now, upd: now, chk: now };
+    persist();
     renderQuiz();
     window.scrollTo({ top: 0 });
   }
 
   function sessionValid() {
-    return session && session.keys && session.keys.length && session.keys.every(function (k) { return qByKey(k); });
+    return !!(session && session.keys && session.keys.length && session.keys.every(function (k) { return qByKey(k); }));
   }
-  function persist() { save(KEY.current, session); }
+  function persist() {
+    if (!session) return;
+    session.upd = Date.now();
+    sessions[session.id] = session; delete sessDel[session.id];
+    saveSessions(); Sync.progressDirty();
+  }
 
   function choose(displayIdx) {
     const key = session.keys[session.pos];
@@ -307,9 +469,9 @@
       total: items.length,
       items: items
     };
-    const h = history(); h.push(attempt); save(KEY.hist, h);
+    const h = history(); h.push(attempt); saveHistory(h);
+    dropSession(session.id);
     session = null;
-    remove(KEY.current);
     Sync.request();
     renderResult(attempt.id);
     window.scrollTo({ top: 0 });
@@ -550,15 +712,16 @@
       '<p class="sub">강의는 주차마다 20문항, 기출은 시험 단위. 답을 고르면 바로 정답과 모든 선지의 해설이 나온다.</p>' +
       pickerHTML();
 
-    if (sessionValid()) {
-      const m = quizMeta(session.quizId);
-      const answered = Object.keys(session.answers).length;
-      const sname = SUBJ[subjectOf(session.quizId)] ? SUBJ[subjectOf(session.quizId)].name + " · " : "";
-      html += '<div class="card resume"><div><b>풀던 퀴즈가 있다</b> — ' + esc(sname + (isMix(session.quizId) ? m.title : m.week + " " + m.title)) +
-        " (" + modeLabel(session.mode) + ", " + answered + "/" + session.keys.length + " 답함)</div>" +
-        '<div style="display:flex;gap:6px"><button class="btn small" data-act="discard">버리기</button>' +
-        '<button class="btn small primary" data-act="resume">이어 풀기</button></div></div>';
-    }
+    sessionList().forEach(function (s) {
+      const m = quizMeta(s.quizId);
+      const answered = Object.keys(s.answers).length;
+      const sname = SUBJ[subjectOf(s.quizId)] ? SUBJ[subjectOf(s.quizId)].name + " · " : "";
+      const note = (s.redo ? " · 문항이 바뀐 " + s.redo + "개는 다시 풀어야 한다" : "") + (s.dropped ? " · 없어진 문항 " + s.dropped + "개는 뺐다" : "");
+      html += '<div class="card resume"><div><b>풀던 퀴즈</b> — ' + esc(sname + (isMix(s.quizId) ? m.title : m.week + " " + m.title)) +
+        " (" + modeLabel(s.mode) + ", " + answered + "/" + s.keys.length + " 답함" + (s.upd ? ", " + fmtDate(s.upd) + " 마지막" : "") + ")" + esc(note) + "</div>" +
+        '<div style="display:flex;gap:6px"><button class="btn small" data-act="discard" data-id="' + s.id + '">버리기</button>' +
+        '<button class="btn small primary" data-act="resume" data-id="' + s.id + '">이어 풀기</button></div></div>';
+    });
 
     html += '<div class="card settings">' +
       '<label><input type="checkbox" id="setOpts"' + (settings.shuffleOpts ? " checked" : "") + "> 선지 순서 섞기</label>" +
@@ -593,7 +756,7 @@
   }
 
   function renderQuiz(justAnswered) {
-    if (!sessionValid()) { session = null; remove(KEY.current); return renderHome(); }
+    if (!sessionValid()) { session = null; return renderHome(); }
     setNav("");
     const key = session.keys[session.pos];
     const r = qByKey(key);
@@ -716,16 +879,17 @@
     return '<div class="stack">' + att.items.map(function (it, i) {
       const r = qByKey(it.key);
       if (!r) return "";
-      const order = it.order || range(r.q.o.length);
+      const stale = !!(r.q.rev && r.q.rev > att.ts);
+      const order = stale ? range(r.q.o.length) : (it.order || range(r.q.o.length));
       const exam = isExam(r.quiz);
       const rightTxt = exam ? fmt(r.q.h) : answerText(r, order, r.q.a);
       return '<details class="card review-item"' + (it.correct ? "" : " open") + ">" +
         '<summary><span class="mark ' + (it.correct ? "ok" : "bad") + '">' + (it.correct ? "○" : "✕") + "</span>" +
           '<div><div class="rq">' + (i + 1) + ". " + fmt(stemOf(String(r.q.q).replace("[공통 지문] ", ""))) + "</div>" +
           '<div class="ra">' + (exam || isMix(att.quizId) || att.mode === "wrong" ? esc(qNumLabel(r)) + " · " : "") +
-            "내 답 " + answerText(r, order, it.chosen) +
+            "내 답 " + (stale ? "(문항이 개정되어 예전 선택을 표시하지 못함)" : answerText(r, order, it.chosen)) +
             (it.correct ? "" : " · 정답 " + rightTxt) + "</div></div></summary>" +
-        '<div class="explain">' + explanationHTML(it.key, order, it.chosen) + "</div>" +
+        '<div class="explain">' + explanationHTML(it.key, order, stale ? null : it.chosen) + "</div>" +
       "</details>";
     }).join("") + "</div>";
   }
@@ -926,7 +1090,7 @@
       // 2) 로컬과 합쳐 로컬에 저장
       const local = history();
       const merged = mergeAttempts(local, remoteAll, resetAt);
-      save(KEY.hist, merged);
+      saveHistory(merged, true);
       save(KEY.meta, { resetAt: resetAt });
       // 3) 원격에 없는 기록이 있는 달만 다시 쓴다
       const remoteIds = {};
@@ -947,7 +1111,56 @@
           if (await writeJSON("meta.json", { resetAt: resetAt }, cur.sha, "기록 초기화")) break;
         }
       }
-      return merged.length !== local.length;
+      const progChanged = await syncProgress();
+      return merged.length !== local.length || progChanged;
+    }
+
+    // 풀던 퀴즈(progress.json): 세션마다 마지막 수정 시각(upd)이 늦은 쪽이 이기고, 지운 세션은 del에 시각을 남겨 되살아나지 않게 한다
+    let pBusy = false, pAgain = false, pTimer = null;
+    function sig(o) { return Object.keys(o || {}).sort().map(function (id) { return id + ":" + ((o[id] && o[id].upd) || 0); }).join(","); }
+    function delSig(o) { return Object.keys(o || {}).sort().map(function (id) { return id + ":" + o[id]; }).join(","); }
+    function mergeProgress(remote) {
+      const rs = (remote && remote.sessions) || {}, rd = (remote && remote.del) || {};
+      let changed = false;
+      Object.keys(rd).forEach(function (id) { if ((sessDel[id] || 0) < rd[id]) { sessDel[id] = rd[id]; changed = true; } });
+      Object.keys(rs).forEach(function (id) {
+        const r = rs[id], l = sessions[id];
+        if (!r || !Array.isArray(r.keys) || (sessDel[id] || 0) >= (r.upd || 0)) return;
+        if (!l || (r.upd || 0) > (l.upd || 0)) { sessions[id] = r; changed = true; }
+      });
+      Object.keys(sessions).forEach(function (id) { if ((sessDel[id] || 0) >= (sessions[id].upd || 0)) { delete sessions[id]; changed = true; } });
+      return changed;
+    }
+    async function syncProgress() {
+      if (!enabled()) return false;
+      if (pBusy) { pAgain = true; return false; }
+      pBusy = true;
+      let changedLocal = false;
+      try {
+        const keep = Date.now() - 90 * 86400000;
+        for (let tries = 0; tries < 4; tries++) {
+          const cur = await readJSON("progress.json");
+          if (mergeProgress(cur.data)) { changedLocal = true; }
+          Object.keys(sessDel).forEach(function (id) { if (sessDel[id] < keep) delete sessDel[id]; });
+          if (changedLocal) saveSessions();
+          const same = cur.data && sig(cur.data.sessions) === sig(sessions) && delSig(cur.data.del) === delSig(sessDel);
+          if (same) break;
+          if (await writeJSON("progress.json", { sessions: sessions, del: sessDel }, cur.sha, "진행 " + Object.keys(sessions).length + "건")) break;
+        }
+      } catch (e) { /* 진행 동기화가 실패해도 이 기기에는 그대로 남아 있다 */ }
+      pBusy = false;
+      if (pAgain) { pAgain = false; syncProgress(); }
+      return changedLocal;
+    }
+    function progressDirty() {
+      if (!enabled()) return;
+      clearTimeout(pTimer);
+      pTimer = setTimeout(function () { syncProgress(); }, 12000);
+    }
+    function flushProgress() {
+      if (!enabled()) return;
+      clearTimeout(pTimer);
+      syncProgress();
     }
 
     function request(onChange) {
@@ -964,7 +1177,7 @@
         if (again) { again = false; request(onChange); }
       });
     }
-    return { enabled: enabled, request: request, chip: chip };
+    return { enabled: enabled, request: request, chip: chip, progressDirty: progressDirty, flushProgress: flushProgress };
   })();
 
   // ---------- export / import ----------
@@ -995,7 +1208,7 @@
         const cur = history();
         const before = cur.length;
         const merged = mergeAttempts(cur, incoming.filter(function (a) { return a && Array.isArray(a.items); }), localMeta().resetAt);
-        save(KEY.hist, merged);
+        saveHistory(merged);
         alert("기록 " + (merged.length - before) + "건을 가져왔다.");
         Sync.request();
         renderHome();
@@ -1033,8 +1246,17 @@
     else if (act === "reveal") revealSelf();
     else if (act === "selfok") gradeSelf(true);
     else if (act === "selfbad") gradeSelf(false);
-    else if (act === "resume") renderQuiz();
-    else if (act === "discard") { session = null; remove(KEY.current); renderHome(); }
+    else if (act === "resume") {
+      const rs = sessionList().filter(function (x) { return x.id === id; })[0];
+      if (rs) { session = rs; renderQuiz(); window.scrollTo({ top: 0 }); } else renderHome();
+    }
+    else if (act === "discard") {
+      if (confirm("이 풀던 기록을 버릴까? (되돌릴 수 없다)")) {
+        dropSession(id);
+        if (session && session.id === id) session = null;
+        renderHome();
+      }
+    }
     else if (act === "history") renderHistory();
     else if (act === "home") renderHome();
     else if (act === "view") renderResult(id);
@@ -1042,7 +1264,7 @@
     else if (act === "lock") { if (confirm("이 기기에 저장된 잠금 해제 정보를 지울까? 다음에 열 때 암호를 다시 넣어야 한다.")) window.QUIZ_LOCK(); }
     else if (act === "reset") {
       if (confirm("모든 과목의 응시 기록을 지울까? " + (Sync.enabled() ? "다른 기기의 기록도 함께 지워진다. " : "") + "(되돌릴 수 없다. 먼저 내보내기를 권한다)")) {
-        save(KEY.hist, []); save(KEY.meta, { resetAt: Date.now() }); Sync.request(); renderHome();
+        saveHistory([], true); save(KEY.meta, { resetAt: Date.now() }); Sync.request(); renderHome();
       }
     }
   });
@@ -1107,14 +1329,36 @@
       });
     });
     migrate();
+    { const hh = rawHistory(); if (hh.length) saveHistory(hh); }   // 깨진 주 저장소를 복사본으로 고치고, 복사본(IndexedDB)을 채운다
+    loadSessions();
     renderHome();
     Sync.chip();
     Sync.request(rerender);
+    // IndexedDB 복사본에서 빠진 기록·진행을 되살린다
+    Promise.all([IDB.get("hist"), IDB.get("sessions")]).then(function (r) {
+      let changed = false;
+      if (Array.isArray(r[0]) && r[0].length) {
+        const cur = history();
+        const merged = mergeAttempts(cur, r[0], localMeta().resetAt);
+        if (merged.length > cur.length) { saveHistory(merged); changed = true; }
+      }
+      if (r[1] && r[1].sessions) {
+        const dels = r[1].del || {};
+        Object.keys(dels).forEach(function (id) { if ((sessDel[id] || 0) < dels[id]) { sessDel[id] = dels[id]; changed = true; } });
+        Object.keys(r[1].sessions).forEach(function (id) {
+          const x = r[1].sessions[id];
+          if (!x || !Array.isArray(x.keys) || (sessDel[id] || 0) >= (x.upd || 0)) return;
+          if (!sessions[id] || (x.upd || 0) > (sessions[id].upd || 0)) { sessions[id] = x; changed = true; }
+        });
+      }
+      if (changed) { saveSessions(); rerender(); }
+    });
+    window.addEventListener("pagehide", function () { Sync.flushProgress(); });
     if (failed && failed.length) {
       app.insertAdjacentHTML("afterbegin", '<div class="card resume">불러오지 못한 데이터 파일: ' + esc(failed.join(", ")) + "</div>");
     }
     // 다른 기기에서 푼 기록을 가져오도록, 화면으로 돌아올 때마다 동기화
-    document.addEventListener("visibilitychange", function () { if (!document.hidden) Sync.request(rerender); });
+    document.addEventListener("visibilitychange", function () { if (document.hidden) Sync.flushProgress(); else Sync.request(rerender); });
   }
   if (window.QUIZ_BOOT) window.QUIZ_BOOT(function () { init([]); });
   else loadData(window.QUIZ_FILES || [], init);
