@@ -336,3 +336,7 @@ body.locked .topbar { display: none; }
 .ex-quote + .ex-quote { margin-top: 6px; }
 
 .sync-chip.upd { color: #fff; background: var(--accent); border-color: var(--accent); }
+
+/* 조합형 문항 해설: 정답 요약 줄 */
+.sx-sum { font-size: 14px; margin: 0 0 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.sx-sum .pill { font-size: 11px; padding: 1px 8px; border-radius: 99px; font-weight: 700; }

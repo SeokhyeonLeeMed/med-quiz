@@ -322,6 +322,7 @@
     const q = r.q;
     let html = "";
     if (q.c) html += '<div class="concept"><b>기본 개념</b>' + fmt(q.c) + "</div>";
+    if (q.sx) return html + comboExplanationHTML(r, order, chosenOrig);
     // 근거 슬라이드가 같은 선지는 한 칸으로 묶고 사진은 하나만 보여 준다.
     // 슬라이드 사진이 없는 과목(noImg)은 선지마다 따로 두고 원문 인용만 보여 준다
     const noImg = !!r.quiz.noImg;
@@ -355,6 +356,57 @@
         if (quotes.indexOf(ex[2]) < 0) quotes.push(ex[2]);
       });
       html += '<div class="ex' + (many ? " grouped" : "") + (noImg ? " noimg" : "") + (hasCorrect ? " is-correct" : (hasChosenWrong ? " is-chosen-wrong" : "")) + '">' +
+        "<div>" + body + "</div>" +
+        (noImg ? "" : thumbHTML(g.ref, g.ref.long + " — " + quotes.join(" / "))) +
+        "</div>";
+    });
+    return html + "</div>";
+  }
+
+  // ㄱㄴㄷㄹ · I II III IV 조합형: 선지 번호가 아니라 보기 하나하나를 해설하고, 슬라이드도 보기별로 연결한다
+  function comboExplanationHTML(r, order, chosenOrig) {
+    const q = r.q, noImg = !!r.quiz.noImg;
+    const stm = {};
+    String(q.q).split(NL).forEach(function (l) {
+      const m = l.match(/^(ㄱ|ㄴ|ㄷ|ㄹ|IV|III|II|I)\. (.*)$/);
+      if (m) stm[m[1]] = m[2];
+    });
+    const split = function (s) { return s.split(",").map(function (x) { return x.trim(); }); };
+    const ansDi = order.indexOf(q.a);
+    let html = '<div class="sx-sum"><b>정답</b> ' + CIRCLED[ansDi] + " " + esc(q.o[q.a]);
+    const chosen = typeof chosenOrig === "number" ? split(q.o[chosenOrig]) : null;
+    if (typeof chosenOrig === "number") {
+      const cd = order.indexOf(chosenOrig);
+      html += ' <span class="pill mine">내 선택 ' + CIRCLED[cd] + " " + esc(q.o[chosenOrig]) + "</span>";
+    }
+    html += "</div>";
+    const groups = [], bySrc = {};
+    q.sx.forEach(function (s, i) {
+      const ref = refInfo(r.quiz, s[3]);
+      const gk = noImg ? "s" + i : ref.src;
+      if (!bySrc[gk]) { bySrc[gk] = { ref: ref, items: [] }; groups.push(bySrc[gk]); }
+      bySrc[gk].items.push(s);
+    });
+    html += '<div class="ex-list">';
+    groups.forEach(function (g) {
+      const many = g.items.length > 1;
+      let body = "", quotes = [], anyWrongPick = false;
+      g.items.forEach(function (s) {
+        const l = s[0], truth = s[1];
+        const picked = chosen ? chosen.indexOf(l) >= 0 : null;
+        const miss = picked !== null && picked !== truth;
+        if (miss) anyWrongPick = true;
+        let pills = truth ? '<span class="pill ok">옳음</span>' : '<span class="pill bad">틀림</span>';
+        if (picked !== null) pills += '<span class="pill mine">' + (picked ? "내 선택에 포함" : "내 선택에서 빠짐") + "</span>";
+        body += '<div class="ex-item' + (truth ? " is-correct" : "") + (miss ? " is-chosen-wrong" : "") + '">' +
+          '<div class="ex-head">' + esc(l) + " " + pills + "</div>" +
+          '<div class="ex-opt">' + fmt(stm[l] || "") + "</div>" +
+          '<div class="ex-why">' + fmt(s[2]) + "</div>" +
+          '<blockquote class="ex-quote"><span class="src">강의노트 ' + esc(g.ref.long) + (many ? " · " + esc(l) + " 근거" : "") + "</span>" +
+            fmt(s[4]) + "</blockquote></div>";
+        if (quotes.indexOf(s[4]) < 0) quotes.push(s[4]);
+      });
+      html += '<div class="ex' + (many ? " grouped" : "") + (noImg ? " noimg" : "") + (anyWrongPick ? " is-chosen-wrong" : "") + '">' +
         "<div>" + body + "</div>" +
         (noImg ? "" : thumbHTML(g.ref, g.ref.long + " — " + quotes.join(" / "))) +
         "</div>";
