@@ -128,7 +128,7 @@
       const pw = pwEl.value;
       if (!pw || !k) return;
       btn.disabled = true;
-      msg.textContent = "여는 중…";
+      msg.textContent = "로그인 중…";
       try {
         const raw = await derive(pw, k);
         const r = await openBundle(raw, blob);
@@ -137,7 +137,7 @@
         pwEl.value = "";
         start(r);
       } catch (err) {
-        msg.textContent = "암호가 맞지 않는다.";
+        msg.textContent = "비밀번호가 틀립니다.";
         btn.disabled = false;
         pwEl.select();
       }

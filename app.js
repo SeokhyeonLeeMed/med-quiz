@@ -744,6 +744,32 @@
     "</div>";
   }
 
+  // 한 주차에 회차(1회·2회…)가 여럿이면 카드 하나에 묶는다
+  function weekGroupCard(list) {
+    const first = list[0];
+    const base = first.title.replace(/ \d+회$/, "");
+    const rows = list.map(function (meta) {
+      const fa = fullAttempts(meta.id);
+      const last = lastAttempt(meta.id);
+      const best = fa.reduce(function (m, a) { return Math.max(m, pct(a)); }, 0);
+      const wrongN = last ? last.items.filter(function (i) { return !i.correct; }).length : 0;
+      const m = meta.title.match(/(\d+회)$/);
+      return '<div class="round">' +
+        '<div class="round-info"><b>' + esc(m ? m[1] : meta.title) + "</b>" +
+          '<span class="meta"><span>' + meta.questions.length + "문항</span>" +
+          (fa.length ? "<span>응시 <b>" + fa.length + "</b>회</span><span>최근 <b>" + pct(fa[fa.length - 1]) + "%</b></span><span>최고 <b>" + best + "%</b></span>" : "<span>응시 기록 없음</span>") +
+          "</span>" + (fa.length ? sparkSVG(fa.map(pct)) : "") + "</div>" +
+        '<div class="round-btns">' +
+          (wrongN ? '<button class="btn small" data-act="wrong" data-id="' + meta.id + '">틀린 ' + wrongN + "문제</button>" : "") +
+          '<button class="btn small primary" data-act="start" data-id="' + meta.id + '">' + (fa.length ? "다시 풀기" : "시작") + "</button>" +
+        "</div>" +
+      "</div>";
+    }).join("");
+    return '<div class="card quiz-card group">' +
+      '<div class="wk">' + esc(first.week + (first.prof ? " · " + first.prof : "")) + "</div>" +
+      '<div class="ttl">' + esc(base) + "</div>" + rows + "</div>";
+  }
+
   function pickerHTML() {
     const gradeBtns = GRADES.map(function (g) {
       const ok = subjectsOfGrade(g).some(function (s) { return hasData(s.id); });
@@ -751,11 +777,8 @@
     }).join("");
     const subjBtns = subjectsOfGrade(settings.grade).map(function (s) {
       const nl = lectureQuizzes(s.id).length, ne = examQuizzes(s.id).length;
-      const parts = [];
-      if (nl) parts.push(nl + "개 주차");
-      if (ne) parts.push("기출 " + ne);
       return '<button type="button" data-subject="' + s.id + '" class="' + (s.id === settings.subject ? "on" : "") + '"' + (nl + ne ? "" : " disabled") + ">" +
-        esc(s.name) + "<small>" + (parts.length ? parts.join(" · ") : "준비 중") + "</small></button>";
+        esc(s.name) + "</button>";
     }).join("");
     return '<div class="picker">' +
       '<div class="picker-row"><span class="picker-label">학년</span><div class="seg">' + gradeBtns + "</div></div>" +
@@ -767,8 +790,7 @@
     setNav("home");
     ensureSelection();
     const subj = SUBJ[settings.subject];
-    let html = "<h1>퀴즈 선택</h1>" +
-      '<p class="sub">강의는 주차마다 20문항, 기출은 시험 단위. 답을 고르면 바로 정답과 모든 선지의 해설이 나온다.</p>' +
+    let html = "<h1>과목 선택</h1>" +
       pickerHTML();
 
     sessionList().forEach(function (s) {
@@ -785,13 +807,18 @@
     html += '<div class="card settings">' +
       '<label><input type="checkbox" id="setOpts"' + (settings.shuffleOpts ? " checked" : "") + "> 선지 순서 섞기</label>" +
       '<label><input type="checkbox" id="setQs"' + (settings.shuffleQs ? " checked" : "") + "> 문제 순서 섞기</label>" +
-      '<span class="hint">새로 시작하는 퀴즈부터 적용 · 기출은 선지를 섞지 않는다 · 조합형(ㄱㄴㄷㄹ)은 보기 순서를 바꾸고 틀린 선지를 새로 뽑아 개수·글자순으로 정렬한다</span></div>';
+      '<span class="hint">기출은 섞이지 않습니다.</span></div>';
 
     if (subj) {
       const lq = lectureQuizzes(subj.id), eq = examQuizzes(subj.id);
       html += "<h2>" + esc(subj.name) + ' <span class="badge">' + esc(subj.grade + " " + subj.term) + "</span></h2>";
       if (lq.length) {
-        html += '<div class="quiz-grid">' + lq.map(function (qz) { return quizCard(qz, qz.questions.length); }).join("") +
+        const groups = [], byWeek = {};
+        lq.forEach(function (qz) {
+          if (!byWeek[qz.week]) { byWeek[qz.week] = []; groups.push(byWeek[qz.week]); }
+          byWeek[qz.week].push(qz);
+        });
+        html += '<div class="quiz-grid">' + groups.map(function (g) { return g.length > 1 ? weekGroupCard(g) : quizCard(g[0], g[0].questions.length); }).join("") +
           quizCard(quizMeta("MIX:" + subj.id), 20) + "</div>";
       }
       if (eq.length) {
@@ -804,8 +831,8 @@
       '<button class="btn small" data-act="export">기록 내보내기 (JSON)</button>' +
       '<label class="btn small" style="cursor:pointer">기록 가져오기<input type="file" id="importFile" accept="application/json,.json" hidden></label>' +
       '<button class="btn small" data-act="reset">기록 초기화</button>' +
-      '<span class="hint">' + (Sync.enabled() ? "기록은 GitHub(비공개 저장소)에 자동 저장되어 다른 기기에서도 이어진다." : "기록은 이 브라우저에 저장된다. 브라우저를 바꾸거나 데이터를 지우기 전에 내보내 두면 된다.") + "</span>" +
-      (window.QUIZ_LOCK ? '<button class="btn small" data-act="lock">이 기기에서 잠그기</button>' : "") +
+      '<span class="hint">' + (Sync.enabled() ? "응시 기록은 서버에 자동 저장되어 다른 기기에서도 연동됩니다." : "응시 기록은 이 브라우저에 저장됩니다. 브라우저를 바꾸기 전에 내보내 두세요.") + "</span>" +
+      (window.QUIZ_LOCK ? '<button class="btn small" data-act="lock">로그아웃</button>' : "") +
       "</div>";
 
     setHTML(html);
@@ -888,11 +915,19 @@
       html += '<div class="actions"><button class="btn primary" data-act="reveal">답을 생각한 뒤 해설 보기</button></div>';
     }
 
+    const isLast = session.pos === total - 1;
+    html += '<div class="qnav">' +
+      '<button class="btn" data-act="prev"' + (session.pos === 0 ? " disabled" : "") + ">← 이전</button>" +
+      '<span class="hint">숫자키 1–9로 선택 · Enter/→ 다음</span>' +
+      '<button class="btn primary" data-act="next"' + (answered ? "" : " disabled") + ">" +
+        (isLast ? (doneN === total ? "결과 보기" : "끝내기") : "다음 →") + "</button>" +
+      "</div>";
+
     if (answered && t !== "self") {
       const ok = isRight(q, chosen);
       const right = answerSet(q).map(function (o) { return CIRCLED[order.indexOf(o)]; }).join(", ");
       html += '<div class="verdict ' + (ok ? "ok" : "bad") + '" id="verdict">' +
-        (ok ? "정답이다." : "틀렸다. 정답은 " + right + "번.") + "</div>" +
+        (ok ? "정답입니다." : "오답입니다. 정답은 " + right + "번입니다.") + "</div>" +
         '<div class="explain">' + explanationHTML(key, order, chosen, r) + "</div>";
     }
     if (revealed) {
@@ -902,15 +937,16 @@
         : '<div class="selfgrade"><span>내 답은?</span><button class="btn" data-act="selfok">맞혔다</button><button class="btn" data-act="selfbad">틀렸다·모르겠다</button></div>';
     }
 
-    const isLast = session.pos === total - 1;
-    html += '<div class="qnav">' +
-      '<button class="btn" data-act="prev"' + (session.pos === 0 ? " disabled" : "") + ">← 이전</button>" +
-      '<span class="hint">숫자키 1–9로 선택 · Enter/→ 다음</span>' +
-      '<button class="btn primary" data-act="next"' + (answered ? "" : " disabled") + ">" +
-        (isLast ? (doneN === total ? "결과 보기" : "끝내기") : "다음 →") + "</button>" +
-      "</div></div>";
+    html += "</div>";
 
     setHTML(html);
+    // 새 문항을 그린 직후 마우스가 그 자리에 있어 선지가 이미 골라진 것처럼 보이지 않게, 마우스를 움직이기 전까지 hover 표시를 끈다
+    const opts = app.querySelector(".opts");
+    if (opts) {
+      opts.classList.add("nohover");
+      const on = function () { opts.classList.remove("nohover"); app.removeEventListener("mousemove", on); };
+      app.addEventListener("mousemove", on);
+    }
     if (justAnswered) {
       const v = document.getElementById("verdict");
       if (v) v.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -981,8 +1017,8 @@
         '<div class="actions">' +
           (!isMix(att.quizId) && wrongN && !att.legacy ? '<button class="btn" data-act="wrong" data-id="' + att.quizId + '">틀린 ' + wrongN + "문제 다시</button>" : "") +
           (canRetry ? '<button class="btn primary" data-act="start" data-id="' + att.quizId + '">' + (isMix(att.quizId) ? "새 랜덤 20문제" : "전체 다시 풀기") + "</button>" : "") +
-          '<button class="btn" data-act="history">기록·진도</button>' +
-          '<button class="btn" data-act="home">퀴즈 선택</button>' +
+          '<button class="btn" data-act="history">기록</button>' +
+          '<button class="btn" data-act="home">과목 선택</button>' +
         "</div></div></div>" +
       "<h2>문항별 확인</h2>" +
       (att.legacy ? "" : '<p class="sub">틀린 문항은 펼쳐져 있다. 맞힌 문항도 눌러서 해설을 볼 수 있다.</p>') +
@@ -1028,8 +1064,7 @@
     ensureSelection();
     const h = history();
     const subj = SUBJ[settings.subject];
-    let html = "<h1>기록·진도</h1>" +
-      '<p class="sub">퀴즈를 끝낼 때마다 점수가 저장된다' + (Sync.enabled() ? "(GitHub에 자동 저장)" : "") + ". 그래프는 전체 응시(오답 다시 풀기 제외)의 점수 변화다. 회색 점은 이전 버전 문항으로 푼 기록이다.</p>" +
+    let html = "<h1>기록</h1>" +
       pickerHTML();
     if (!subj) { setHTML(html); return; }
     const ids = quizzesOfSubject(subj.id).map(function (q) { return q.id; }).concat(["MIX:" + subj.id]);
@@ -1085,9 +1120,9 @@
       el.hidden = !enabled();
       el.className = "sync-chip " + state;
       const t = lastOk ? new Date(lastOk) : null;
-      el.textContent = state === "ok" ? "☁ 저장됨" + (t ? " " + String(t.getHours()).padStart(2, "0") + ":" + String(t.getMinutes()).padStart(2, "0") : "")
-        : state === "busy" ? "☁ 저장 중…" : state === "err" ? "☁ 저장 실패 — 다시 시도" : "☁";
-      el.title = msg || "GitHub 기록 동기화";
+      el.textContent = state === "ok" ? "저장됨" + (t ? " " + String(t.getHours()).padStart(2, "0") + ":" + String(t.getMinutes()).padStart(2, "0") : "")
+        : state === "busy" ? "저장 중…" : state === "err" ? "저장 실패 — 다시 시도" : "동기화";
+      el.title = msg || "응시 기록 동기화";
     }
     function set(s, m) { state = s; msg = m || ""; chip(); }
     function b64enc(str) {
@@ -1310,7 +1345,7 @@
       if (rs) { session = rs; renderQuiz(); window.scrollTo({ top: 0 }); } else renderHome();
     }
     else if (act === "discard") {
-      if (confirm("이 풀던 기록을 버릴까? (되돌릴 수 없다)")) {
+      if (confirm("응시를 취소하시겠습니까? (되돌릴 수 없음)")) {
         dropSession(id);
         if (session && session.id === id) session = null;
         renderHome();
@@ -1320,7 +1355,7 @@
     else if (act === "home") renderHome();
     else if (act === "view") renderResult(id);
     else if (act === "export") exportHistory();
-    else if (act === "lock") { if (confirm("이 기기에 저장된 잠금 해제 정보를 지울까? 다음에 열 때 암호를 다시 넣어야 한다.")) window.QUIZ_LOCK(); }
+    else if (act === "lock") { if (confirm("로그아웃하시겠습니까? 다음에 열 때 비밀번호를 다시 입력해야 합니다.")) window.QUIZ_LOCK(); }
     else if (act === "reset") {
       if (confirm("모든 과목의 응시 기록을 지울까? " + (Sync.enabled() ? "다른 기기의 기록도 함께 지워진다. " : "") + "(되돌릴 수 없다. 먼저 내보내기를 권한다)")) {
         saveHistory([], true); save(KEY.meta, { resetAt: Date.now() }); Sync.request(); renderHome();

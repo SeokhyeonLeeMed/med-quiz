@@ -14,29 +14,28 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800&display=swap">
-<link rel="stylesheet" href="style.css?v=411bc39fbe">
+<link rel="stylesheet" href="style.css?v=c5b68ebdb1">
 </head>
 <body>
 <div id="lock" class="lock" hidden>
   <form class="card lock-card" id="lockForm" autocomplete="on">
-    <span class="brand-mark">KU</span>
+    <img class="lock-logo" src="logo.svg" alt="고려대학교">
     <h1>의대 강의 퀴즈</h1>
-    <p class="sub">암호를 넣으면 이 기기에서는 다음부터 바로 열린다.</p>
     <input type="text" name="username" value="med-quiz" autocomplete="username" hidden>
-    <input id="pw" name="password" type="password" autocomplete="current-password" placeholder="암호" required>
-    <button id="pwGo" class="btn primary" type="submit">열기</button>
+    <input id="pw" name="password" type="password" autocomplete="current-password" placeholder="비밀번호" aria-label="비밀번호" required>
+    <button id="pwGo" class="btn primary" type="submit">로그인</button>
     <p class="hint" id="pwMsg"></p>
   </form>
 </div>
 <header class="topbar">
   <button class="brand" id="homeBtn" type="button">
-    <span class="brand-mark">KU</span>
-    <span class="brand-text">의대 강의 퀴즈<small id="brandSub">강의노트·기출 기반</small></span>
+    <img class="brand-logo" src="logo.svg" alt="고려대학교">
+    <span class="brand-text">의대 강의 퀴즈</span>
   </button>
   <nav class="topnav">
-    <button type="button" id="syncChip" class="sync-chip" hidden>☁</button>
-    <button type="button" id="navHome" class="navbtn">퀴즈 선택</button>
-    <button type="button" id="navHistory" class="navbtn">기록·진도</button>
+    <button type="button" id="syncChip" class="sync-chip" hidden>동기화</button>
+    <button type="button" id="navHome" class="navbtn">과목 선택</button>
+    <button type="button" id="navHistory" class="navbtn">기록</button>
   </nav>
 </header>
 
@@ -50,7 +49,7 @@
   </div>
 </div>
 
-<script src="boot.js?v=2500470de5"></script>
-<script src="app.js?v=d4f2e74738"></script>
+<script src="boot.js?v=ed0e36153d"></script>
+<script src="app.js?v=3a19a53244"></script>
 </body>
 </html>

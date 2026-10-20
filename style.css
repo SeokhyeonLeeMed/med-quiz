@@ -343,3 +343,28 @@ body.locked .topbar { display: none; }
 .badge.pf { background: var(--surface-2); color: var(--ink-2); }
 .badge.alt { background: var(--accent-soft, #e6efff); color: var(--accent, #2457c5); }
 .xnote { margin: 8px 0 4px; padding: 8px 12px; border-left: 3px solid var(--line); background: var(--surface-2); color: var(--ink-2); font-size: 13px; border-radius: 4px; }
+
+/* 2026-10-20 디자인 수정 */
+.brand-logo { width: 28px; height: auto; display: block; flex: none; }
+/* 로그인 화면 */
+.lock-card { align-items: center; text-align: center; gap: 14px; padding: 32px 26px 24px; }
+.lock-card .lock-logo { width: 64px; height: auto; margin-bottom: 2px; }
+.lock-card h1 { margin: 0 0 6px; font-size: 22px; }
+.lock-card input[type=password], .lock-card .btn { width: 100%; }
+.lock-card .btn { padding: 11px 14px; font-size: 15px; }
+/* 새 문항을 그린 직후에는 마우스가 움직이기 전까지 선지 hover 표시를 하지 않는다. 터치 기기는 hover 표시 없음 */
+.opts.nohover .opt:hover:not(:disabled) { border-color: var(--line); background: var(--surface); }
+@media (hover: none) {
+  .opt:hover:not(:disabled) { border-color: var(--line); background: var(--surface); }
+}
+/* 이전·다음 버튼이 선지와 해설 사이에 온다 */
+.qnav { margin: 16px 0 4px; }
+/* 한 주차의 회차 묶음 */
+.quiz-card.group { gap: 8px; }
+.quiz-card.group .round { border-top: 1px solid var(--line); padding-top: 10px; display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.quiz-card.group .round-info { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.quiz-card.group .round-info > b { font-size: 15px; }
+.quiz-card.group .round-btns { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; margin-left: auto; }
+.quiz-card.group .round .meta { font-size: 13px; color: var(--ink-3); display: flex; gap: 10px; flex-wrap: wrap; }
+.quiz-card.group .round .meta b { color: var(--ink); font-weight: 600; }
+.quiz-card.group .row { margin-top: 0; }
