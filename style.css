@@ -368,3 +368,7 @@ body.locked .topbar { display: none; }
 .quiz-card.group .round .meta { font-size: 13px; color: var(--ink-3); display: flex; gap: 10px; flex-wrap: wrap; }
 .quiz-card.group .round .meta b { color: var(--ink); font-weight: 600; }
 .quiz-card.group .row { margin-top: 0; }
+/* 기출 그림(해설지에서 잘라 낸 그림) */
+.figs { display: flex; flex-direction: column; gap: 10px; margin: 0 0 16px; }
+.thumb.figimg { width: auto; max-width: 100%; align-self: flex-start; padding: 8px; background: #fff; border-radius: 10px; }
+.thumb.figimg img { display: block; max-width: 100%; max-height: 420px; width: auto; height: auto; object-fit: contain; }

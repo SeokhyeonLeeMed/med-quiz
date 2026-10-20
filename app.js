@@ -671,7 +671,7 @@
   function examStemHTML(r, num) {
     const q = r.q;
     const lines = String(q.q).split(NL);
-    let out = "", first = true, para = [];
+    let out = "", first = true, para = [], figShown = false;
     function flush() {
       if (!para.length) return;
       const txt = para.join(NL);
@@ -689,6 +689,17 @@
       }
       if (t === "[그림]" || t === "[표]") {
         flush();
+        // 해설지에 정리해 둔 그림이 있으면 그 그림만 보여 준다(한 번만). 없으면 원본 시험지 쪽을 보여 준다
+        if (q.figs && q.figs.length) {
+          if (!figShown) {
+            out += '<div class="figs">' + q.figs.map(function (src) {
+              return '<button type="button" class="thumb figimg" data-src="' + esc(src) + '" data-cap="' + esc(num + "번 그림") + '" title="크게 보기">' +
+                '<img data-img="' + esc(src) + '" alt="' + esc(num + "번 그림") + '"></button>';
+            }).join("") + "</div>";
+            figShown = true;
+          }
+          return;
+        }
         const ref = refInfo(r.quiz, q.p || 1);
         out += '<div class="figline">' + thumbHTML(ref, "원본 시험지 " + ref.long) + '<span class="hint">그림·표는 원본 시험지에서 확인 (눌러서 크게 보기)</span></div>';
         return;
@@ -882,7 +893,7 @@
 
     if (exam) html += examStemHTML(r, num);
     if (exam && q.notes && q.notes.length) html += '<div class="xnote">' + q.notes.map(function (n) { return "<div>" + fmt(n) + "</div>"; }).join("") + "</div>";
-    else html += '<p class="qtext">' + num + ". " + fmt(stemOf(q.q)) + "</p>" + (bogiOf(q.q) ? '<div class="bogi">' + fmt(bogiOf(q.q)) + "</div>" : "");
+    if (!exam) html += '<p class="qtext">' + num + ". " + fmt(stemOf(q.q)) + "</p>" + (bogiOf(q.q) ? '<div class="bogi">' + fmt(bogiOf(q.q)) + "</div>" : "");
 
     // 선지
     if (q.o.length) {
@@ -916,12 +927,13 @@
     }
 
     const isLast = session.pos === total - 1;
-    html += '<div class="qnav">' +
+    const navHTML = '<div class="qnav">' +
       '<button class="btn" data-act="prev"' + (session.pos === 0 ? " disabled" : "") + ">← 이전</button>" +
       '<span class="hint">숫자키 1–9로 선택 · Enter/→ 다음</span>' +
       '<button class="btn primary" data-act="next"' + (answered ? "" : " disabled") + ">" +
         (isLast ? (doneN === total ? "결과 보기" : "끝내기") : "다음 →") + "</button>" +
       "</div>";
+    html += navHTML;
 
     if (answered && t !== "self") {
       const ok = isRight(q, chosen);
@@ -937,6 +949,8 @@
         : '<div class="selfgrade"><span>내 답은?</span><button class="btn" data-act="selfok">맞혔다</button><button class="btn" data-act="selfbad">틀렸다·모르겠다</button></div>';
     }
 
+    // 맨 아래(원래 자리)에도 이전·다음 버튼을 둔다
+    if (answered || revealed) html += navHTML;
     html += "</div>";
 
     setHTML(html);
