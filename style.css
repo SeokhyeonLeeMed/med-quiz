@@ -251,7 +251,7 @@ table.hist th { color: var(--ink-3); font-weight: 600; font-size: 12px; }
   border: 1px solid var(--line); background: var(--surface); border-radius: 999px;
   padding: 6px 14px; font-size: 14px; font-weight: 500; color: var(--ink-2);
 }
-.seg button:hover:not(:disabled) { border-color: var(--accent); color: var(--ink); }
+.seg button:hover:not(:disabled):not(.on) { border-color: var(--accent); color: var(--ink); }
 .seg button.on { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
 .seg button:disabled { opacity: .45; cursor: default; }
 .seg button small { font-weight: 400; opacity: .8; margin-left: 4px; }
