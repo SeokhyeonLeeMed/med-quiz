@@ -162,10 +162,12 @@
   // ㄱㄴㄷ 보기형 문항: 첫 줄은 발문, 나머지는 보기 상자로
   function stemOf(t) { const k = t.indexOf(NL); return k < 0 ? t : t.slice(0, k); }
   function bogiOf(t) { const k = t.indexOf(NL); return k < 0 ? "" : t.slice(k + 1); }
-  function shuffle(a) {
+  // rnd: 0~1 난수 함수. 인쇄(print.js)는 판 번호로 만든 난수를 넘겨 같은 판이면 같은 순서가 나오게 한다
+  function shuffle(a, rnd) {
     a = a.slice();
+    rnd = rnd || Math.random;
     for (let i = a.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
+      const j = Math.floor(rnd() * (i + 1));
       const t = a[i]; a[i] = a[j]; a[j] = t;
     }
     return a;
@@ -289,7 +291,7 @@
   // 조합형 문항을 풀 때마다 새로 만든다(선지 순서 섞기가 켜져 있을 때): 보기 문장을 섞어 ㄱㄴㄷㄹ(I II III IV)을 다시 붙이고,
   // 정답 조합이 정해지면 나머지 선지 4개는 정답을 뺀 모든 조합에서 무작위로 뽑아 개수 오름차순·글자 오름차순으로 정렬한다.
   // 보기별 해설(sx)은 문장에 붙어 다니므로 글자만 바꾼다.
-  function makeVariant(q) {
+  function makeVariant(q, rnd) {
     if (!q.sx || !isComboQ(q)) return null;
     const isKo = q.o.every(function (o) { return /^[ㄱ-ㅎ](, [ㄱ-ㅎ])*$/.test(o); });
     const L = isKo ? ["ㄱ", "ㄴ", "ㄷ", "ㄹ"] : ["I", "II", "III", "IV"], N = L.length;
@@ -303,11 +305,11 @@
     if (!L.every(function (l) { return sxBy[l]; })) return null;
     const corr = q.o[q.a].split(",").map(function (x) { return x.trim(); });
     let perm = range(N);
-    for (let t = 0; t < 30; t++) { perm = shuffle(range(N)); if (perm.some(function (p, i) { return p !== i; })) break; }
+    for (let t = 0; t < 30; t++) { perm = shuffle(range(N), rnd); if (perm.some(function (p, i) { return p !== i; })) break; }
     const ns = perm.map(function (p, i) { return { l: L[i], old: L[p], text: stm[p].text }; });
     const cm = ns.reduce(function (m, x, i) { return m | (corr.indexOf(x.old) >= 0 ? 1 << i : 0); }, 0);
     const pool = []; for (let m = 1; m < (1 << N); m++) if (m !== cm) pool.push(m);
-    const masks = [cm].concat(shuffle(pool).slice(0, 4));
+    const masks = [cm].concat(shuffle(pool, rnd).slice(0, 4));
     const idxs = function (m) { const r = []; for (let i = 0; i < N; i++) if (m & (1 << i)) r.push(i); return r; };
     masks.sort(function (a, b) {
       const A = idxs(a), B = idxs(b);
@@ -749,6 +751,7 @@
         "<div>" + sparkSVG(fa.map(pct)) + "</div>" +
         '<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">' +
           (!mix && wrongN ? '<button class="btn small" data-act="wrong" data-id="' + meta.id + '">틀린 ' + wrongN + "문제</button>" : "") +
+          (!mix && !exam ? '<button class="btn small" data-act="print" data-id="' + meta.id + '" title="문제지·해설지 인쇄">인쇄</button>' : "") +
           '<button class="btn small primary" data-act="start" data-id="' + meta.id + '">' + (fa.length ? "다시 풀기" : "시작") + "</button>" +
         "</div>" +
       "</div>" +
@@ -772,6 +775,7 @@
           "</span>" + (fa.length ? sparkSVG(fa.map(pct)) : "") + "</div>" +
         '<div class="round-btns">' +
           (wrongN ? '<button class="btn small" data-act="wrong" data-id="' + meta.id + '">틀린 ' + wrongN + "문제</button>" : "") +
+          '<button class="btn small" data-act="print" data-id="' + meta.id + '" title="문제지·해설지 인쇄">인쇄</button>' +
           '<button class="btn small primary" data-act="start" data-id="' + meta.id + '">' + (fa.length ? "다시 풀기" : "시작") + "</button>" +
         "</div>" +
       "</div>";
@@ -1347,6 +1351,7 @@
     if (!b || b.disabled) return;
     const act = b.dataset.act, id = b.dataset.id;
     if (act === "start") startQuiz(id, "full");
+    else if (act === "print") { if (window.QuizPrint) window.QuizPrint.open(id); }
     else if (act === "wrong") startQuiz(id, "wrong");
     else if (act === "next") go(1);
     else if (act === "prev") go(-1);
@@ -1468,6 +1473,15 @@
     // 다른 기기에서 푼 기록을 가져오도록, 화면으로 돌아올 때마다 동기화
     document.addEventListener("visibilitychange", function () { if (document.hidden) Sync.flushProgress(); else Sync.request(rerender); });
   }
+  // 인쇄(print.js)가 쓰는 함수들
+  window.QuizApp = {
+    quiz: function (id) { return BY_ID[id]; },
+    subject: function (id) { return SUBJ[id]; },
+    doc: function (id) { return DOCS[id]; },
+    settings: function () { return settings; },
+    refInfo: refInfo, isComboQ: isComboQ, makeVariant: makeVariant, shuffle: shuffle, range: range,
+    fixedOrder: fixedOrder, imgURL: imgURL, stemOf: stemOf, bogiOf: bogiOf
+  };
   if (window.QUIZ_BOOT) window.QUIZ_BOOT(function () { init([]); });
   else loadData(window.QUIZ_FILES || [], init);
 })();
