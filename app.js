@@ -49,6 +49,14 @@
     oldHist: "bcq_history_v1",
     oldCurrent: "bcq_current_v1"
   };
+  // 계정마다 기록을 따로 둔다(같은 브라우저에서 여러 계정을 써도 섞이지 않게). 로그인 전(로컬판)은 예전 키 그대로
+  const IDBK = { hist: "hist", sessions: "sessions" };
+  function scopeTo(user) {
+    if (!user) return;
+    const sfx = "@" + user.provider + ":" + user.uid;
+    ["hist", "meta", "current", "sessions", "sessDel", "histMirror", "sessMirror"].forEach(function (k) { KEY[k] = KEY[k] + sfx; });
+    IDBK.hist += sfx; IDBK.sessions += sfx;
+  }
   const CIRCLED = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩"];
 
   // ---------- storage ----------
@@ -125,7 +133,7 @@
         out = Object.keys(map).map(function (k) { return map[k]; }).sort(function (x, y) { return x.ts - y.ts; });
       }
     }
-    save(KEY.hist, out); save(KEY.histMirror, out); IDB.put("hist", out);
+    save(KEY.hist, out); save(KEY.histMirror, out); IDB.put(IDBK.hist, out);
     return out;
   }
 
@@ -251,6 +259,8 @@
   function setNav(which) {
     document.getElementById("navHome").classList.toggle("active", which === "home");
     document.getElementById("navHistory").classList.toggle("active", which === "history");
+    const ad = document.getElementById("navAdmin");
+    if (ad) ad.classList.toggle("active", which === "admin");
   }
   function modeLabel(m) { return m === "wrong" ? "오답 다시" : m === "mix" ? "랜덤" : "전체"; }
 
@@ -344,7 +354,7 @@
   function saveSessions() {
     save(KEY.sessions, sessions); save(KEY.sessMirror, sessions); save(KEY.sessDel, sessDel);
     // 비어 있는 상태로 IndexedDB 복사본을 덮어쓰지 않는다(복구 전에 지워지는 것을 막는다)
-    if (Object.keys(sessions).length || Object.keys(sessDel).length) IDB.put("sessions", { sessions: sessions, del: sessDel });
+    if (Object.keys(sessions).length || Object.keys(sessDel).length) IDB.put(IDBK.sessions, { sessions: sessions, del: sessDel });
   }
   function loadSessions() {
     let m = load(KEY.sessions, null);
@@ -811,10 +821,16 @@
     setNav("home");
     ensureSelection();
     const subj = SUBJ[settings.subject];
+    const locked = !!window.QUIZ_LOCKED;
     let html = "<h1>과목 선택</h1>" +
       pickerHTML();
+    if (locked) {
+      const u = window.QuizAuth && window.QuizAuth.user();
+      html += '<div class="card resume"><div>' + (u ? "<b>승인 대기 중</b> — 관리자가 승인하면 문항을 볼 수 있습니다." : "<b>목록만 보입니다</b> — 로그인하면 문항을 풀고 인쇄할 수 있습니다.") + "</div>" +
+        '<div><button class="btn small primary" data-act="login">' + (u ? "승인 확인" : "로그인") + "</button></div></div>";
+    }
 
-    sessionList().forEach(function (s) {
+    if (!locked) sessionList().forEach(function (s) {
       const m = quizMeta(s.quizId);
       const answered = Object.keys(s.answers).length;
       const sname = SUBJ[subjectOf(s.quizId)] ? SUBJ[subjectOf(s.quizId)].name + " · " : "";
@@ -825,7 +841,7 @@
         '<button class="btn small primary" data-act="resume" data-id="' + s.id + '">이어 풀기</button></div></div>';
     });
 
-    html += '<div class="card settings">' +
+    if (!locked) html += '<div class="card settings">' +
       '<label><input type="checkbox" id="setOpts"' + (settings.shuffleOpts ? " checked" : "") + "> 선지 순서 섞기</label>" +
       '<label><input type="checkbox" id="setQs"' + (settings.shuffleQs ? " checked" : "") + "> 문제 순서 섞기</label>" +
       '<span class="hint">기출은 섞이지 않습니다.</span></div>';
@@ -852,15 +868,16 @@
       }
     }
 
-    html += '<div class="footer-tools">' +
+    if (!locked) html += '<div class="footer-tools">' +
       '<button class="btn small" data-act="export">기록 내보내기 (JSON)</button>' +
       '<label class="btn small" style="cursor:pointer">기록 가져오기<input type="file" id="importFile" accept="application/json,.json" hidden></label>' +
       '<button class="btn small" data-act="reset">기록 초기화</button>' +
       '<span class="hint">' + (Sync.enabled() ? "응시 기록은 서버에 자동 저장되어 다른 기기에서도 연동됩니다." : "응시 기록은 이 브라우저에 저장됩니다. 브라우저를 바꾸기 전에 내보내 두세요.") + "</span>" +
-      (window.QUIZ_LOCK ? '<button class="btn small" data-act="lock">로그아웃</button>' : "") +
+
       "</div>";
 
     setHTML(html);
+    if (locked) return;
     document.getElementById("setOpts").onchange = function (e) { settings.shuffleOpts = e.target.checked; saveSettings(); };
     document.getElementById("setQs").onchange = function (e) { settings.shuffleQs = e.target.checked; saveSettings(); };
     document.getElementById("importFile").onchange = importHistory;
@@ -1087,6 +1104,86 @@
       .slice(0, 3).map(function (k) { return { key: k, s: stat[k] }; });
   }
 
+  // ---------- 관리자 ----------
+  // 사용자(승인·승인 취소), 인쇄 기록, 사이트 수정 기록. 비밀번호와 응시 기록은 관리자에게도 보이지 않는다(서버 규칙)
+  function addAdminNav() {
+    if (!window.QuizAuth || !window.QuizAuth.isAdmin() || document.getElementById("navAdmin")) return;
+    const b = document.createElement("button");
+    b.type = "button"; b.id = "navAdmin"; b.className = "navbtn"; b.textContent = "관리";
+    b.onclick = function () { renderAdmin("users"); };
+    const nav = document.querySelector(".topnav"), auth = document.getElementById("authBtn");
+    nav.insertBefore(b, auth || null);
+  }
+  function fmtTs(v) { return v ? fmtDate(new Date(v).getTime()) : ""; }
+  async function renderAdmin(tab) {
+    const QA = window.QuizAuth;
+    if (!QA || !QA.isAdmin()) return renderHome();
+    tab = tab || "users";
+    setNav("admin");
+    const tabs = [["users", "사용자"], ["prints", "인쇄 기록"], ["changes", "사이트 수정 기록"]];
+    setHTML("<h1>관리</h1>" + '<div class="picker"><div class="picker-row"><div class="seg">' +
+      tabs.map(function (t) { return '<button type="button" data-act="admin" data-tab="' + t[0] + '" class="' + (t[0] === tab ? "on" : "") + '">' + t[1] + "</button>"; }).join("") +
+      '</div></div></div><div id="adminBody"><p class="sub">불러오는 중…</p></div>');
+    const body = document.getElementById("adminBody");
+    if (tab === "changes") {
+      const ch = window.QUIZ_CHANGES || [];
+      body.innerHTML = ch.length ? '<div class="stack">' + ch.map(function (c) {
+        return '<div class="card"><b>' + esc(fmtTs(c.t)) + "</b>" + (c.summary ? ' <span class="hint">' + esc(c.summary) + "</span>" : "") +
+          '<ul class="xl">' + (c.items || []).map(function (x) { return "<li>" + esc(x) + "</li>"; }).join("") + "</ul></div>";
+      }).join("") + "</div>" : '<p class="empty">아직 기록이 없다.</p>';
+      return;
+    }
+    let out = "";
+    for (const p of QA.providers()) {
+      out += "<h2>" + esc(QA.names[p]) + " 계정</h2>";
+      let sess = null;
+      try { sess = await QA.admin.session(p); } catch (e) { sess = null; }
+      if (!sess) {
+        out += '<form class="card adm-login" data-prov="' + p + '"><p class="hint">이 방식의 사용자를 보려면 이 방식의 관리자 계정으로도 로그인해야 합니다.</p>' +
+          '<input name="id" placeholder="ID" autocomplete="username"> <input name="pw" type="password" placeholder="비밀번호" autocomplete="current-password"> ' +
+          '<button class="btn small primary" type="submit">로그인</button> <span class="hint adm-msg"></span></form>';
+        continue;
+      }
+      try {
+        if (tab === "users") {
+          const us = await QA.admin.listUsers(p);
+          us.sort(function (a, b) { return (a.approved ? 1 : 0) - (b.approved ? 1 : 0); });
+          out += '<div class="table-wrap"><table class="hist"><thead><tr><th>ID</th><th>이름</th><th>가입</th><th>상태</th><th></th></tr></thead><tbody>' +
+            us.map(function (u) {
+              const self = u.uid === sess.uid;
+              return "<tr><td>" + esc(u.loginId) + (u.isAdmin ? ' <span class="badge">관리자</span>' : "") + "</td><td>" + esc(u.name) + "</td><td>" + esc(fmtTs(u.created)) + "</td>" +
+                "<td>" + (u.approved ? "승인됨" : "<b>승인 대기</b>") + "</td><td>" +
+                (self ? "" : '<button class="btn small' + (u.approved ? "" : " primary") + '" type="button" data-ap="' + p + '" data-uid="' + esc(u.uid) + '" data-v="' + (u.approved ? "0" : "1") + '">' + (u.approved ? "승인 취소" : "승인") + "</button>") +
+                "</td></tr>";
+            }).join("") + "</tbody></table></div>";
+        } else {
+          const ls = await QA.admin.listPrintLogs(p);
+          out += ls.length ? '<div class="table-wrap"><table class="hist"><thead><tr><th>시각</th><th>ID</th><th>이름</th><th>문서</th><th>방식</th><th>판</th></tr></thead><tbody>' +
+            ls.map(function (l) {
+              return "<tr><td>" + esc(fmtTs(l.at)) + "</td><td>" + esc(l.loginId) + "</td><td>" + esc(l.name) + "</td><td>" + esc(l.title || l.quizId) + " " + (l.kind === "key" ? "해설지" : "문제지") + "</td>" +
+                "<td>" + (l.fmt === "docx" ? "Word 파일" : "인쇄·PDF") + "</td><td>" + esc(l.code || "") + "</td></tr>";
+            }).join("") + "</tbody></table></div>" : '<p class="empty">인쇄 기록이 없다.</p>';
+        }
+      } catch (e) { out += '<p class="hint">불러오지 못했다: ' + esc(e && e.message || e) + "</p>"; }
+    }
+    body.innerHTML = out;
+    body.querySelectorAll("[data-ap]").forEach(function (b) {
+      b.onclick = async function () {
+        b.disabled = true;
+        try { await QA.admin.setApproved(b.dataset.ap, b.dataset.uid, b.dataset.v === "1"); renderAdmin(tab); }
+        catch (e) { alert("바꾸지 못했다: " + (e && e.message || e)); b.disabled = false; }
+      };
+    });
+    body.querySelectorAll(".adm-login").forEach(function (f) {
+      f.onsubmit = async function (e) {
+        e.preventDefault();
+        const m = f.querySelector(".adm-msg"); m.textContent = "로그인 중…";
+        try { await QA.admin.signIn(f.dataset.prov, f.id.value.trim().toLowerCase(), f.pw.value); renderAdmin(tab); }
+        catch (err) { m.textContent = String(err && err.message || err); }
+      };
+    });
+  }
+
   function renderHistory() {
     setNav("history");
     ensureSelection();
@@ -1140,8 +1237,9 @@
   // 비공개 저장소의 history/YYYY-MM.json(월별 응시 기록 배열)과 meta.json({resetAt})을 쓴다.
   const Sync = (function () {
     let busy = false, again = false, lastOk = 0, state = "off", msg = "";
-    function cfg() { return window.QUIZ_SYNC || null; }
-    function enabled() { return !!cfg(); }
+    // 저장소: 로그인한 계정의 기록 공간(auth.js의 store — 본인만 읽고 쓴다). 경로별 JSON과 판(ver)으로 충돌을 막는다
+    function store() { return window.QUIZ_STORE || null; }
+    function enabled() { return !!store(); }
     function chip() {
       const el = document.getElementById("syncChip");
       if (!el) return;
@@ -1153,45 +1251,10 @@
       el.title = msg || "응시 기록 동기화";
     }
     function set(s, m) { state = s; msg = m || ""; chip(); }
-    function b64enc(str) {
-      const bytes = new TextEncoder().encode(str);
-      let bin = ""; for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
-      return btoa(bin);
-    }
-    function b64dec(b64) {
-      const bin = atob(b64.replace(/\s/g, ""));
-      const bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      return new TextDecoder().decode(bytes);
-    }
-    function api(path, opt) {
-      const c = cfg();
-      opt = opt || {};
-      const headers = { Authorization: "Bearer " + c.token, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" };
-      if (opt.body) headers["Content-Type"] = "application/json";
-      return fetch("https://api.github.com/repos/" + c.owner + "/" + c.repo + "/contents/" + path + (opt.method ? "" : "?ref=" + (c.branch || "main") + "&t=" + Date.now()),
-        { method: opt.method || "GET", headers: headers, body: opt.body, cache: "no-store" });
-    }
-    async function readJSON(path) {
-      const res = await api(path);
-      if (res.status === 404) return { data: null, sha: null };
-      if (!res.ok) throw new Error("읽기 실패 " + res.status);
-      const j = await res.json();
-      return { data: JSON.parse(b64dec(j.content || "") || "null"), sha: j.sha };
-    }
-    async function writeJSON(path, data, sha, message) {
-      const body = { message: message, content: b64enc(JSON.stringify(data)), branch: cfg().branch || "main" };
-      if (sha) body.sha = sha;
-      const res = await api(path, { method: "PUT", body: JSON.stringify(body) });
-      if (res.status === 409 || res.status === 422) return false; // 다른 기기가 먼저 썼다 → 다시 읽고 합친다
-      if (!res.ok) throw new Error("쓰기 실패 " + res.status);
-      return true;
-    }
+    function readJSON(path) { return store().read(path); }
+    function writeJSON(path, data, sha) { return store().write(path, data, sha); }
     async function listMonths() {
-      const res = await api("history");
-      if (res.status === 404) return [];
-      if (!res.ok) throw new Error("목록 실패 " + res.status);
-      const j = await res.json();
-      return (Array.isArray(j) ? j : []).filter(function (f) { return /\.json$/.test(f.name); }).map(function (f) { return f.name.replace(/\.json$/, ""); });
+      return (await store().list("history/")).map(function (p) { return p.replace(/^history\//, "").replace(/\.json$/, ""); });
     }
     function monthOf(ts) { const d = new Date(ts); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0"); }
 
@@ -1360,6 +1423,8 @@
     const b = e.target.closest("[data-act]");
     if (!b || b.disabled) return;
     const act = b.dataset.act, id = b.dataset.id;
+    if (window.QUIZ_LOCKED && act !== "home") return askLogin();
+    if (act === "admin") return renderAdmin(b.dataset.tab);
     if (act === "start") startQuiz(id, "full");
     else if (act === "print") { if (window.QuizPrint) window.QuizPrint.open(id); }
     else if (act === "wrong") startQuiz(id, "wrong");
@@ -1384,7 +1449,6 @@
     else if (act === "home") renderHome();
     else if (act === "view") renderResult(id);
     else if (act === "export") exportHistory();
-    else if (act === "lock") { if (confirm("로그아웃하시겠습니까? 다음에 열 때 비밀번호를 다시 입력해야 합니다.")) window.QUIZ_LOCK(); }
     else if (act === "reset") {
       if (confirm("모든 과목의 응시 기록을 지울까? " + (Sync.enabled() ? "다른 기기의 기록도 함께 지워진다. " : "") + "(되돌릴 수 없다. 먼저 내보내기를 권한다)")) {
         saveHistory([], true); save(KEY.meta, { resetAt: Date.now() }); Sync.request(); renderHome();
@@ -1394,7 +1458,12 @@
 
   document.getElementById("homeBtn").onclick = function () { renderHome(); };
   document.getElementById("navHome").onclick = function () { renderHome(); };
-  document.getElementById("navHistory").onclick = function () { renderHistory(); };
+  document.getElementById("navHistory").onclick = function () { if (window.QUIZ_LOCKED) return askLogin(); renderHistory(); };
+  // 로그인 전: 누르면 로그인 창(가입했지만 승인 전이면 승인 대기 안내)
+  function askLogin() {
+    if (!window.QuizAuth || !window.QuizAuth.enabled()) return;
+    if (window.QuizAuth.user()) window.QuizAuth.pending(); else window.QuizAuth.login("로그인하면 문항을 풀고 인쇄할 수 있습니다.");
+  }
   const chipEl = document.getElementById("syncChip");
   if (chipEl) chipEl.onclick = function () { Sync.request(rerender); };
 
@@ -1440,7 +1509,27 @@
   }
 
   // ---------- start ----------
+  // 로그인 전에 이 브라우저에 쌓인 기록(예전 키)을 처음 로그인한 계정으로 옮길지 한 번 묻는다
+  function adoptLegacy() {
+    const FLAG = "mq_legacy_adopted_v1";
+    if (load(FLAG, null)) return;
+    let old = load("mq_history_v1", null);
+    if (!Array.isArray(old)) old = load("mq_history_mirror_v1", []);
+    const oldSess = load("mq_sessions_v1", null) || {};
+    const n = (old || []).length, ns = Object.keys(oldSess).length;
+    if (!n && !ns) return;
+    if (confirm("이 브라우저에 로그인 전 응시 기록 " + n + "건" + (ns ? "과 풀던 퀴즈 " + ns + "개" : "") + "가 있습니다. 지금 로그인한 계정으로 옮길까요? (취소하면 옮기지 않고 다시 묻지 않습니다)")) {
+      saveHistory(mergeAttempts(rawHistory(), old, 0), true);
+      const curSess = load(KEY.sessions, null) || {};
+      save(KEY.sessions, Object.assign({}, oldSess, curSess));
+      save(KEY.sessDel, Object.assign({}, load("mq_sessions_del_v1", {}), load(KEY.sessDel, {})));
+    }
+    save(FLAG, Date.now());
+  }
+
   function init(failed) {
+    scopeTo(window.QUIZ_USER);
+    if (window.QUIZ_USER && !window.QUIZ_LOCKED) adoptLegacy();
     SUBJECTS = window.QUIZ_SUBJECTS || [];
     GRADES = window.QUIZ_GRADES || [];
     SUBJECTS.forEach(function (s) { SUBJ[s.id] = s; });
@@ -1455,10 +1544,11 @@
     { const hh = rawHistory(); if (hh.length) saveHistory(hh); }   // 깨진 주 저장소를 복사본으로 고치고, 복사본(IndexedDB)을 채운다
     loadSessions();
     renderHome();
+    addAdminNav();
     Sync.chip();
     Sync.request(rerender);
     // IndexedDB 복사본에서 빠진 기록·진행을 되살린다
-    Promise.all([IDB.get("hist"), IDB.get("sessions")]).then(function (r) {
+    Promise.all([IDB.get(IDBK.hist), IDB.get(IDBK.sessions)]).then(function (r) {
       let changed = false;
       if (Array.isArray(r[0]) && r[0].length) {
         const cur = history();

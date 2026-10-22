@@ -1,13 +1,12 @@
-// 배포판 전용: 암호로 d.bin(문항·과목·동기화 설정)과 img/*.bin(강의노트·시험지 그림)을 푼다.
-// 암호에서 PBKDF2-SHA256으로 AES-GCM 키를 만들고, 맞으면 그 키를 이 기기에 저장해 다음부터는 묻지 않는다.
+// 배포판 전용: d.bin(문항·과목)과 img/*.bin(강의노트·시험지 그림)은 AES-GCM으로 암호화되어 있다.
+// 풀 열쇠(내용 열쇠)는 로그인해 관리자 승인을 받은 계정만 로그인 서버(Supabase/Firebase)에서 받는다(auth.js).
+// 로그인하지 않았거나 승인 전이면 공개 목록(catalog.json: 과목·퀴즈 제목·문항 수)만 보여 준다.
 (function () {
   "use strict";
-  const LS = "mq_key_v1";
   const imgCache = {};
   let aesKey = null;
 
   function b64d(s) { const b = atob(s); const u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; }
-  function b64e(u) { let s = ""; for (let i = 0; i < u.length; i++) s += String.fromCharCode(u[i]); return btoa(s); }
   async function fetchBuf(url, fresh) {
     const r = await fetch(url, { cache: fresh ? "no-cache" : "default" });
     if (!r.ok) throw new Error(url + " " + r.status);
@@ -22,11 +21,6 @@
     return new Uint8Array(await new Response(s).arrayBuffer());
   }
   function importKey(raw) { return crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["decrypt"]); }
-  async function derive(pw, k) {
-    const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pw.normalize("NFC")), "PBKDF2", false, ["deriveBits"]);
-    const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: b64d(k.salt), iterations: k.iter }, base, 512);
-    return new Uint8Array(bits).slice(0, 32);
-  }
   async function openBundle(raw, blob) {
     const key = await importKey(raw);
     const data = JSON.parse(new TextDecoder().decode(await gunzip(await decrypt(key, blob))));
@@ -77,70 +71,53 @@
   checkUpdate(true);
   document.addEventListener("visibilitychange", function () { if (!document.hidden) checkUpdate(false); });
 
-  window.QUIZ_LOCK = function () {
-    try { localStorage.removeItem(LS); } catch (e) { /* ignore */ }
-    location.reload();
-  };
+  window.QUIZ_LOCK = function () { window.QuizAuth.signOut(); };
+
+  // 공개 목록으로 화면을 채운다: 문항 내용 없이 퀴즈마다 문항 수만큼 빈 문항을 둔다(카드의 "N문항" 표시용)
+  function catalogBank(cat) {
+    return cat.quizzes.map(function (z) {
+      const qs = [];
+      for (let i = 0; i < z.n; i++) qs.push({ t: i < (z.nSelf || 0) ? "self" : "mc" });
+      return Object.assign({}, z, { questions: qs, locked: true });
+    });
+  }
 
   window.QUIZ_BOOT = function (done) {
-    const lock = document.getElementById("lock");
     const app = document.getElementById("app");
-    const msg = document.getElementById("pwMsg");
-    const pwEl = document.getElementById("pw");
-    const btn = document.getElementById("pwGo");
-    let k = null, blob = null;
-
-    function start(r) {
+    function start(r, prof) {
       aesKey = r.key;
       const d = r.data;
       window.QUIZ_SUBJECTS = d.subjects;
       window.QUIZ_GRADES = d.grades;
       window.QUIZ_BANK = d.bank;
-      window.QUIZ_SYNC = d.sync || null;
-      lock.hidden = true;
-      document.body.classList.remove("locked");
+      window.QUIZ_CHANGES = d.changes || [];
+      window.QUIZ_USER = prof;
+      window.QUIZ_STORE = window.QuizAuth.store();
       done();
     }
-    function showLock() {
-      app.innerHTML = "";
-      lock.hidden = false;
-      document.body.classList.add("locked");
-      pwEl.focus();
+    function startLocked(cat, prof) {
+      window.QUIZ_LOCKED = true;
+      window.QUIZ_SUBJECTS = cat.subjects;
+      window.QUIZ_GRADES = cat.grades;
+      window.QUIZ_BANK = catalogBank(cat);
+      window.QUIZ_USER = prof || null;
+      done();
+      if (prof && !prof.approved) window.QuizAuth.pending();
     }
-
     Promise.all([
-      fetch("k.json", { cache: "no-cache" }).then(function (r) { return r.json(); }),
-      fetchBuf("d.bin", true)
+      fetch("catalog.json", { cache: "no-cache" }).then(function (r) { return r.json(); }),
+      window.QuizAuth.init()
     ]).then(async function (res) {
-      k = res[0]; blob = res[1];
-      let saved = null;
-      try { saved = localStorage.getItem(LS); } catch (e) { /* ignore */ }
-      if (saved) {
-        try { return start(await openBundle(b64d(saved), blob)); } catch (e) { /* 암호가 바뀌었으면 다시 묻는다 */ }
+      const cat = res[0], prof = res[1];
+      if (prof && prof.approved) {
+        try {
+          const k = await window.QuizAuth.contentKey();
+          if (k) return start(await openBundle(b64d(k), await fetchBuf("d.bin", true)), prof);
+        } catch (e) { /* 열쇠가 바뀌었거나 네트워크 오류: 목록만 보여 준다 */ }
       }
-      showLock();
+      startLocked(cat, prof);
     }, function (err) {
       app.innerHTML = '<p class="sub">데이터를 불러오지 못했다: ' + String(err.message || err) + "</p>";
-    });
-
-    document.getElementById("lockForm").addEventListener("submit", async function (e) {
-      e.preventDefault();
-      const pw = pwEl.value;
-      if (!pw || !k) return;
-      btn.disabled = true;
-      msg.textContent = "로그인 중…";
-      try {
-        const raw = await derive(pw, k);
-        const r = await openBundle(raw, blob);
-        try { localStorage.setItem(LS, b64e(raw)); } catch (err) { /* 저장이 안 되면 매번 묻는다 */ }
-        msg.textContent = "";
-        pwEl.value = "";
-        start(r);
-      } catch (err) {
-        msg.textContent = "비밀번호가 틀립니다.";
-        btn.disabled = false;
-        pwEl.select();
-      }
     });
   };
 })();

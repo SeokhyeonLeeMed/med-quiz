@@ -1139,8 +1139,13 @@
     if (my === s.seq) busy(false);
   }
 
+  // 인쇄 기록(관리자 화면): 누가 어떤 문서를 어떤 방식으로 만들었는지
+  function logPrint(fmt) {
+    if (window.QuizAuth) window.QuizAuth.logPrint({ quizId: state.id, title: state.meta.name, kind: state.kind, fmt: fmt, code: state.meta.shuffle ? state.code : null });
+  }
   async function doPrint() {
     if (!state.doc) return;
+    logPrint("print");
     const imgs = Array.from(root.querySelectorAll(".qp-pages img"));
     await Promise.all(imgs.map((im) => im.decode ? im.decode().catch(() => {}) : null));
     const t = document.title;
@@ -1161,6 +1166,7 @@
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 60000);
       msg("Word 파일을 받았습니다: " + a.download);
+      logPrint("docx");
     } catch (e) { msg("Word 파일을 만들지 못했습니다: " + (e && e.message || e)); }
     busy(false);
   }

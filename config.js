@@ -1,0 +1,1 @@
+window.QUIZ_AUTH_CONFIG = {"idDomain":"med-quiz.invalid","providers":{"supabase":{"url":"https://iiemtscuslgtyqhyjpdt.supabase.co","anonKey":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlpZW10c2N1c2xndHlxaHlqcGR0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI2MzcxNDgsImV4cCI6MjEwODIxMzE0OH0.dpGMWocjkBys_DZI5aWdLKKyHrK9hleGDmL0ZC9JGEQ"}}};
