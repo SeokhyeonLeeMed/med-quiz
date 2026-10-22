@@ -259,9 +259,11 @@
     segs.forEach(function (seg, i) {
       const html = hRuns(seg, p.sz);
       if (i < segs.length - 1) {
-        const w = Math.max(0, (stops[i] != null ? stops[i] : cur) - cur);
+        // 정한 탭 위치가 없으면 Word의 기본 탭(0.5인치 = 36pt 간격, defaultTabStop 720)으로 간다 — 예: 빈칸 "(\t)"
+        const stop = stops[i] != null ? stops[i] : (Math.floor((cur + textWidth(seg, p.sz)) / 36 + 1e-6) + 1) * 36;
+        const w = Math.max(0, stop - cur);
         body += '<span class="qp-tb" style="width:' + w.toFixed(2) + 'pt">' + html + "</span>";
-        cur = stops[i] != null ? stops[i] : cur;
+        cur = stop;
       } else body += html;
     });
     let inner = "font-size:" + p.sz + "pt;line-height:" + p.ln + "pt;padding-right:" + NARROW + "pt;";
@@ -325,10 +327,13 @@
   }
   function textWidth(runsList, sz) {
     const m = measurer();
+    // measureUnits가 hPara를 부르는 도중에도 쓰이므로(탭 칸 너비) 너비·내용을 되돌려 놓는다
+    const w0 = m.style.width, h0 = m.innerHTML;
     m.style.width = "2000pt";
     m.innerHTML = '<span style="font-size:' + sz + 'pt;white-space:pre">' + runsList.map((r) => hRun(r, sz)).join("") + "</span>";
     const w = m.firstChild.getBoundingClientRect().width * 0.75;
-    m.innerHTML = "";
+    m.innerHTML = h0;
+    m.style.width = w0;
     return w;
   }
   async function fontsReady(text) {
