@@ -751,7 +751,7 @@
         "<div>" + sparkSVG(fa.map(pct)) + "</div>" +
         '<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">' +
           (!mix && wrongN ? '<button class="btn small" data-act="wrong" data-id="' + meta.id + '">틀린 ' + wrongN + "문제</button>" : "") +
-          (!mix && !exam ? '<button class="btn small" data-act="print" data-id="' + meta.id + '" title="문제지·해설지 인쇄">인쇄</button>' : "") +
+          '<button class="btn small" data-act="print" data-id="' + meta.id + '" title="문제지·해설지 인쇄">인쇄</button>' +
           '<button class="btn small primary" data-act="start" data-id="' + meta.id + '">' + (fa.length ? "다시 풀기" : "시작") + "</button>" +
         "</div>" +
       "</div>" +
@@ -1480,7 +1480,8 @@
     doc: function (id) { return DOCS[id]; },
     settings: function () { return settings; },
     refInfo: refInfo, isComboQ: isComboQ, makeVariant: makeVariant, shuffle: shuffle, range: range,
-    fixedOrder: fixedOrder, imgURL: imgURL, stemOf: stemOf, bogiOf: bogiOf
+    fixedOrder: fixedOrder, imgURL: imgURL, stemOf: stemOf, bogiOf: bogiOf,
+    lectureQuizzes: lectureQuizzes, isExam: isExam
   };
   if (window.QUIZ_BOOT) window.QUIZ_BOOT(function () { init([]); });
   else loadData(window.QUIZ_FILES || [], init);

@@ -45,9 +45,11 @@
   }
 
   // 판 번호로 문항마다 선지 순서(조합형은 보기까지 새로 만든 변형)를 정한다. 문제지·해설지가 같은 함수를 쓴다
-  function prepare(qz, code) {
-    const X = A(), S = X.settings(), rnd = rng(seedOf(code + "|" + qz.id));
-    return qz.questions.map(function (q0, i) {
+  // refs: [{qz, i}] — 강의 퀴즈 한 회차의 문항들, 또는 과목 전체에서 뽑은 랜덤 20문항
+  function prepareItems(refs, rnd) {
+    const X = A(), S = X.settings();
+    return refs.map(function (ref, k) {
+      const qz = ref.qz, i = ref.i, q0 = qz.questions[i];
       let q = q0, order;
       if (X.isComboQ(q0)) {
         const v = S.shuffleOpts && q0.sx ? X.makeVariant(q0, rnd) : null;
@@ -56,8 +58,48 @@
       } else {
         order = S.shuffleOpts ? X.shuffle(X.range(q0.o.length), rnd) : X.fixedOrder(qz.id + "#" + i, q0.o.length);
       }
-      return { n: i + 1, q: q, order: order, ans: order.indexOf(q.a) };
+      const ans = order.indexOf(q.a);
+      return { n: k + 1, lab: String(k + 1), qz: qz, q: q, order: order, ans: ans, ansText: CIRC[ans] };
     });
+  }
+  // 기출: 선지를 섞지 않는다(해설이 ①② 번호를 직접 가리킨다). 정답은 여러 개일 수 있고 서술형은 없다
+  function examItems(qz) {
+    return qz.questions.map(function (q, k) {
+      const a = q.a || [];
+      return { n: k + 1, lab: String(q.label || q.n).replace(/\s+/g, " "), qz: qz, q: q, exam: 1, order: (q.o || []).map((_, i) => i),
+        ansSet: a, ansText: q.t === "self" || !a.length ? "서술" : a.map((i) => CIRC[i]).join("") };
+    });
+  }
+
+  // 문서 정보: 강의 회차 / 과목 랜덤 20문제("MIX:과목") / 기출
+  function docMeta(quizId) {
+    const X = A();
+    if (quizId.indexOf("MIX:") === 0) {
+      const sid = quizId.slice(4), s = X.subject(sid) || { name: sid };
+      return { type: "mix", id: quizId, sid: sid, subject: s.name, grade: s.grade, term: s.term, shuffle: true,
+        head: "전체 범위 랜덤 20문제", round: "", name: s.name + " 랜덤 20문제" };
+    }
+    const qz = X.quiz(quizId);
+    if (!qz) return null;
+    if (X.isExam(qz)) {
+      return { type: "exam", id: quizId, qz: qz, subject: qz.subject, grade: qz.grade, term: qz.term, shuffle: false,
+        head: qz.title, round: "", name: qz.subject + " " + qz.title, note: qz.note };
+    }
+    const t = titleParts(qz);
+    return { type: "lecture", id: quizId, qz: qz, subject: qz.subject, grade: qz.grade, term: qz.term, shuffle: true,
+      head: qz.week + " " + t.base + (qz.prof ? " (" + qz.prof + ")" : ""), round: t.round,
+      keyHead: qz.week + " " + qz.title, name: qz.subject + " " + qz.week + (t.round ? " " + t.round : "") };
+  }
+  function docItems(m, code) {
+    const X = A();
+    if (m.type === "exam") return examItems(m.qz);
+    if (m.type === "mix") {
+      const refs = [];
+      X.lectureQuizzes(m.sid).forEach((qz) => qz.questions.forEach((_, i) => refs.push({ qz: qz, i: i })));
+      const rnd = rng(seedOf(code + "|" + m.id));
+      return prepareItems(X.shuffle(refs, rnd).slice(0, 20), rnd);
+    }
+    return prepareItems(m.qz.questions.map((_, i) => ({ qz: m.qz, i: i })), rng(seedOf(code + "|" + m.id)));
   }
 
   // ---------- 글 조각(run) ----------
@@ -122,7 +164,7 @@
     return Math.max(base, Math.ceil((w + 3) * 20) / 20);
   }
   function bogiLine(l) {
-    const m = String(l).match(/^((?:[ㄱ-ㅎ]|IV|V|I{1,3}|[A-H])\.|\([가-하]\))\s*(.*)$/);
+    const m = String(l).match(/^((?:[ㄱ-ㅎ]|IV|V|I{1,3}|[A-Ha-h])[.)]|\([가-하]\))\s*(.*)$/);
     return m ? { lab: m[1], text: m[2] } : { lab: "", text: l };
   }
 
@@ -231,11 +273,13 @@
     const pad = (p.bf || p.af) ? ' style="margin:' + p.bf + "pt 0 " + p.af + 'pt 0"' : "";
     return '<div class="qp-p"' + pad + '><div style="' + inner + '">' + body + "</div></div>";
   }
+  // 상자 안 위·아래 여백은 빈 문단으로 둔다(Word는 칸 위·아래 여백을 브라우저와 다르게 더한다)
+  function boxItems(b) { return (b.mt ? [SP(b.mt)] : []).concat(b.items, b.mb ? [SP(b.mb)] : []); }
   function hBox(b) {
-    let st = "width:" + b.w + "pt;padding:" + b.mt + "pt " + b.mr + "pt " + b.mb + "pt " + b.ml + "pt;";
+    let st = "width:" + b.w + "pt;padding:0 " + b.mr + "pt 0 " + b.ml + "pt;";
     if (b.fill) st += "background:#" + b.fill + ";";
     if (b.bdr) st += "box-shadow:inset 0 0 0 " + b.bdr.sz + "pt #" + b.bdr.c + ";";
-    return '<div class="qp-box" style="' + st + '">' + b.items.map(hItem).join("") + "</div>";
+    return '<div class="qp-box" style="' + st + '">' + boxItems(b).map(hItem).join("") + "</div>";
   }
   function hGrid(g) {
     const W = g.cols.reduce((s, x) => s + x, 0);
@@ -298,7 +342,6 @@
       await document.fonts.ready;
     } catch (e) { /* 글꼴을 못 불러도 진행 */ }
   }
-  function allText(qz) { return JSON.stringify(qz.questions) + qz.title + qz.subject + "①②③④⑤■“”‘’0123456789번정답오답옳음틀림쪽강의판인쇄"; }
 
   // 그림 크기 미리 알기 (배포판은 암호를 풀어 blob 주소)
   const imgInfo = {};
@@ -319,54 +362,114 @@
   // ======================================================================
   // 문제지
   // ======================================================================
-  function examTitle(qz) {
-    const t = titleParts(qz);
+  function examTitle(m) {
     const items = [
-      P({ sz: 10, jc: "center" }, [R(gradeText(qz) ? "고려대학교 의과대학 " + gradeText(qz) : "고려대학교 의과대학")]),
-      P({ sz: 17, jc: "center" }, [R(qz.subject, { b: 1 })]),
-      P({ sz: 12, jc: "center" }, [R(qz.week + " " + t.base + (qz.prof ? " (" + qz.prof + ")" : ""), { b: 1 })])
+      P({ sz: 10, jc: "center" }, [R(gradeText(m) ? "고려대학교 의과대학 " + gradeText(m) : "고려대학교 의과대학")]),
+      P({ sz: 17, jc: "center" }, [R(m.subject, { b: 1 })]),
+      P({ sz: 12, jc: "center" }, [R(m.head, { b: 1 })])
     ];
-    if (t.round) items.push(P({ sz: 12, jc: "center" }, [R("- " + t.round + " -", { b: 1 })]));
+    if (m.round) items.push(P({ sz: 12, jc: "center" }, [R("- " + m.round + " -", { b: 1 })]));
     return items;
   }
 
-  function examQuestion(it) {
-    const q = it.q, X = A();
-    const lines = String(q.q).split("\n");
-    const stem = lines[0], bogi = lines.slice(1).filter((l) => l.trim());
-    const out = [];
-    out.push(P({ sz: 9.5, il: 15.6, hg: 15.6, af: bogi.length ? 0 : 12 }, [R(it.n + ".", { b: 1 }), TAB].concat(runs(stem))));
-    if (bogi.length) {
-      out.push({
-        k: "box", w: COL_W, bdr: { sz: 0.5, c: "808080" }, mt: 0, mb: 0, ml: 5.4, mr: 5.4,
-        items: (function () {
-          const bs = bogi.map(bogiLine), hg = labelHang(bs, 9, { b: 1 }, 14.15);
-          return bs.map((b) => b.lab ? P({ sz: 9, il: hg, hg: hg }, [R(b.lab, { b: 1 }), TAB].concat(runs(b.text))) : P({ sz: 9 }, runs(b.text)));
-        })()
-      });
-    }
-    // 짧은 선지(조합형 등)는 한 줄에 3개씩
+  // 보기 상자(ㄱㄴㄷㄹ, (가)(나), a/b …)
+  function bogiBox(lines, w) {
+    const bs = lines.map(bogiLine), hg = labelHang(bs, 9, { b: 1 }, 14.15);
+    return { k: "box", w: w, bdr: { sz: 0.5, c: "808080" }, mt: 0, mb: 0, ml: 5.4, mr: 5.4,
+      items: bs.map((b) => b.lab ? P({ sz: 9, il: hg, hg: hg }, [R(b.lab, { b: 1 }), TAB].concat(runs(b.text))) : P({ sz: 9 }, runs(b.text))) };
+  }
+  // 선지: 짧은 선지(조합형 등)는 한 줄에 3개씩
+  function optionParas(it, bf0) {
+    const q = it.q, X = A(), out = [];
     const opts = it.order.map((o, di) => [R(CIRC[di] + " ")].concat(runs(q.o[o])));
     const slot = [TW(1672) - TW(142), TW(3203) - TW(1672), COL_W - TW(3203)];
     const three = X.isComboQ(q) || opts.every((rs) => textWidth(rs, 9.5) <= Math.min.apply(null, slot) - 4);
     if (three && opts.length <= 6) {
       for (let r = 0; r < opts.length; r += 3) {
-        const row = opts.slice(r, r + 3);
         let rs = [];
-        row.forEach(function (o, k) { if (k) rs.push(TAB); rs = rs.concat(o); });
-        out.push(P({ sz: 9.5, il: TW(142), tabs: [TW(1672), TW(3203)], bf: r === 0 && bogi.length ? 3 : 0 }, rs));
+        opts.slice(r, r + 3).forEach(function (o, k) { if (k) rs.push(TAB); rs = rs.concat(o); });
+        out.push(P({ sz: 9.5, il: TW(142), tabs: [TW(1672), TW(3203)], bf: r === 0 ? bf0 : 0 }, rs));
       }
     } else {
       it.order.forEach(function (o, di) {
-        out.push(P({ sz: 9.5, il: TW(425), hg: TW(283), bf: di === 0 && bogi.length ? 3 : 0 }, [R(CIRC[di]), TAB].concat(runs(q.o[o]))));
+        out.push(P({ sz: 9.5, il: TW(425), hg: TW(283), bf: di === 0 ? bf0 : 0 }, [R(CIRC[di]), TAB].concat(runs(q.o[o]))));
       });
     }
     return out;
   }
+  // 문항 번호 칸: 번호("31 보완." 등)가 칸보다 넓으면 넓힌다
+  function numHang(lab) { return Math.max(15.6, Math.ceil((textWidth([R(lab + ".", { b: 1 })], 9.5) + 3) * 20) / 20); }
+
+  function examQuestion(it) {
+    const q = it.q;
+    const lines = String(q.q).split("\n");
+    const stem = lines[0], bogi = lines.slice(1).filter((l) => l.trim());
+    const hg = numHang(it.lab), out = [];
+    out.push(P({ sz: 9.5, il: hg, hg: hg, af: bogi.length ? 0 : 12 }, [R(it.lab + ".", { b: 1 }), TAB].concat(runs(stem))));
+    if (bogi.length) out.push(bogiBox(bogi, COL_W));
+    return out.concat(optionParas(it, bogi.length ? 3 : 0));
+  }
+
+  // 기출 발문 나누기(사이트와 같은 규칙): 빈 줄 = 문단 구분, [공통 지문] = 지문 상자, | a / b | = 보기 상자, [그림]·[표] = 잘라 둔 그림
+  function examStemParts(q) {
+    const parts = [];
+    let para = [];
+    const flush = function () { if (para.length) { parts.push({ k: "p", t: para.join("\n") }); para = []; } };
+    String(q.q).split("\n").forEach(function (l) {
+      const t = l.trim();
+      if (!t) { flush(); return; }
+      if (t.indexOf("[공통 지문]") === 0) { flush(); parts.push({ k: "shared", t: t.replace("[공통 지문]", "").trim() }); return; }
+      if (t.charAt(0) === "|") { flush(); parts.push({ k: "bogi", lines: t.replace(/^\|\s*|\s*\|$/g, "").split(" / ") }); return; }
+      if (t === "[그림]" || t === "[표]") { flush(); if (!parts.some((p) => p.k === "fig")) parts.push({ k: "fig" }); return; }
+      para.push(t);
+    });
+    flush();
+    return parts;
+  }
+  // 상자가 맞붙으면 사이에 3pt (Word는 표끼리 붙으면 하나로 합치므로 빈 문단이 필요하다 — 두 출력 모두 같은 빈 칸을 둔다)
+  function pushBlock(out, b) {
+    const last = out[out.length - 1];
+    if (last && (last.k === "box" || last.k === "grid") && (b.k === "box" || b.k === "grid")) out.push(SP(3));
+    out.push(b);
+  }
+  async function figItems(q, maxW, il) {
+    const out = [];
+    for (const src of q.figs || []) {
+      const im = await loadImg(src);
+      if (!im) continue;
+      const w = Math.min(maxW, Math.round(im.w * 0.36 * 20) / 20), h = Math.round(w * im.h / im.w * 20) / 20;   // 잘라 둔 그림은 200dpi
+      out.push({ k: "img", src: src, url: im.url, w: w, h: h, ln: Math.ceil(h + 4), il: il, bf: 2, af: 2 });
+    }
+    return out;
+  }
+  async function examQuestionX(it) {
+    const q = it.q, hg = numHang(it.lab), out = [];
+    let numbered = false;
+    for (const p of examStemParts(q)) {
+      if (p.k === "p") {
+        out.push(numbered ? P({ sz: 9.5, il: hg, bf: 3 }, runs(p.t)) : P({ sz: 9.5, il: hg, hg: hg }, [R(it.lab + ".", { b: 1 }), TAB].concat(runs(p.t))));
+        numbered = true;
+      } else if (p.k === "shared") {
+        pushBlock(out, { k: "box", w: COL_W, fill: "F5F5F5", bdr: { sz: 0.5, c: "808080" }, mt: 2, mb: 2, ml: 5.4, mr: 5.4, items: [P({ sz: 9 }, runs(p.t))] });
+      } else if (p.k === "bogi") {
+        pushBlock(out, bogiBox(p.lines, COL_W));
+      } else (await figItems(q, COL_W - hg - 2, hg)).forEach((x) => out.push(x));
+    }
+    if (!numbered) out.unshift(P({ sz: 9.5, il: hg, hg: hg }, [R(it.lab + ".", { b: 1 })]));
+    const last = out[out.length - 1];
+    if (q.o && q.o.length) {
+      if (last.k === "p") { last.af = 12; return out.concat(optionParas(it, 0)); }
+      return out.concat(optionParas(it, 3));
+    }
+    // 서술형·선지 복기 실패: 답 쓰는 칸
+    if (last.k === "p") last.af = 4;
+    pushBlock(out, { k: "box", w: COL_W, bdr: { sz: 0.5, c: "808080" }, mt: 2, mb: 0, ml: 5.4, mr: 5.4,
+      items: [P({ sz: 8.5 }, [R("답", { b: 1, c: GRAY })]), SP(70)] });
+    return out;
+  }
 
   // 문제를 단에 채운다: 넘치면 문제 전체를 다음 단으로, 왼쪽 단 → 오른쪽 단 → 다음 쪽
-  function layoutExam(qz, items, title) {
-    const units = items.map(examQuestion);
+  function layoutExam(units, title) {
     const hs = measureUnits(units, COL_W);
     const gapH = ln(9.5);
     const titleH = measureUnits([title], BODY_W)[0];
@@ -396,33 +499,35 @@
     return { pages: pages, T: T, title: title, heights: hs };
   }
 
-  function examFooter(qz, code, first) {
-    const left = qz.subject + " " + qz.week + " 문제지";
-    return { left: left, right: first ? today() + " 인쇄 (판 " + code + ")" : "판 " + code };
+  function examFooter(m, code, first) {
+    const pan = m.shuffle ? "판 " + code : "";
+    return { left: m.name + " 문제지", right: first ? today() + " 인쇄" + (pan ? " (" + pan + ")" : "") : pan };
   }
 
-  function examPagesHTML(L, qz, code) {
+  function examPagesHTML(L, m, code) {
     return L.pages.map(function (pg, k) {
-      const ft = examFooter(qz, code, k === 0);
+      const ft = examFooter(m, code, k === 0);
       let h = '<div class="qp-pg qp-font"><div class="qp-body">';
       if (pg.first) h += '<div class="qp-title" style="height:' + L.T + 'pt">' + L.title.map(hItem).join("") + "</div>";
       h += '<div class="qp-cols" style="height:' + pg.colH + 'pt">' +
         '<div class="qp-col" style="width:' + COL_L + "pt;padding:0 " + COL_PAD + 'pt 0 0">' + pg.cols[0].map(hItem).join("") + "</div>" +
         '<div class="qp-col" style="width:' + COL_R + "pt;padding:0 0 0 " + COL_PAD_R + 'pt">' + pg.cols[1].map(hItem).join("") + "</div>" +
         '<div class="qp-sep" style="left:' + COL_L + 'pt"></div></div>';
-      return h + "</div>" + footerHTML(ft) + "</div>";
+      return h + "</div>" + footerHTML(ft, k + 1) + "</div>";
     }).join("");
   }
 
   // ======================================================================
   // 해설지
   // ======================================================================
-  function keyTitle(qz) {
-    return [
-      P({ sz: 17 }, [R(qz.subject, { b: 1 })]),
-      P({ sz: 12 }, [R(qz.week + " " + qz.title + " 해설지", { b: 1 })]),
+  function keyTitle(m) {
+    const out = [
+      P({ sz: 17 }, [R(m.subject, { b: 1 })]),
+      P({ sz: 12 }, [R((m.keyHead || m.head) + " 해설지", { b: 1 })]),
       P({ sz: 9.5, ln: 6, af: 6, bdr: { sz: 1.75, c: BLUE, sp: 1 } }, [])
     ];
+    if (m.note) out.push(P({ sz: 8.5, af: 4 }, [R("※ " + m.note, { c: GRAY })]));
+    return out;
   }
 
   function answerGrid(items) {
@@ -434,26 +539,76 @@
       const nums = [head("번호")], ans = [head("정답")];
       for (let j = 0; j < 10; j++) {
         const it = items[s + j];
-        nums.push({ fill: "F2F2F2", items: [P({ sz: 8.5, jc: "center", ln: 18.4 }, it ? [R(String(it.n), { b: 1 })] : [])] });
-        ans.push({ items: [P({ sz: 10, jc: "center", ln: 18.4 }, it ? [R(CIRC[it.ans], { b: 1, c: RED })] : [])] });
+        nums.push({ fill: "F2F2F2", items: [P({ sz: 8.5, jc: "center", ln: 18.4 }, it ? [R(it.lab.replace(/ /g, ""), { b: 1 })] : [])] });
+        const at = it ? it.ansText : "";
+        ans.push({ items: [P({ sz: at.length > 1 ? 8.5 : 10, jc: "center", ln: 18.4 }, it ? [R(at, { b: 1, c: RED })] : [])] });
       }
       rows.push({ h: TW(433), cells: nums }, { h: TW(433), cells: ans });
     }
     return { k: "grid", cols: cols, rows: rows, bdr: { sz: 0.5, c: "808080" } };
   }
 
+  // 기출 해설: 원고(q.x) 한 줄이 한 문단. # 소제목, - 글머리, ①… 선지, → 고친 문장, ! 주의 상자, + 함께 알기 상자
+  async function examKeyUnits(it) {
+    const q = it.q, units = [], set = it.ansSet || [];
+    const head = [R(it.lab + "번", { b: 1, c: BLUE, sz: 12 }), R("     정답 " + (q.h || it.ansText), { b: 1, c: RED, sz: 11 })];
+    if (q.pf) head.push(R("     " + q.pf + " 교수", { c: GRAY, sz: 9 }));
+    const u1 = [P({ sz: 12, bf: 14, af: 2, bdr: { sz: 0.75, c: BLUE, sp: 1 } }, head)];
+    let firstP = true;
+    for (const p of examStemParts(q)) {
+      if (p.k === "p" || p.k === "shared") {
+        u1.push(P({ sz: 8.5, bf: firstP ? 3 : 2, af: 1 }, runs((p.k === "shared" ? "[공통 지문] " : "") + p.t, { c: GRAY })));
+        firstP = false;
+      } else if (p.k === "bogi") {
+        const bs = p.lines.map(bogiLine), bhg = labelHang(bs, 8.5, {}, TW(227));
+        bs.forEach((b) => u1.push(b.lab ? P({ sz: 8.5, il: TW(170) + bhg, hg: bhg }, [R(b.lab, { c: GRAY }), TAB].concat(runs(b.text, { c: GRAY })))
+          : P({ sz: 8.5, il: TW(170) }, runs(b.text, { c: GRAY }))));
+      } else (await figItems(q, 220, TW(170))).forEach((x) => u1.push(x));
+    }
+    (q.o || []).forEach(function (o, i) {
+      const st = set.indexOf(i) >= 0 && q.t !== "self" ? { b: 1, c: RED } : { c: GRAY };
+      u1.push(P({ sz: 8.5, il: TW(425), hg: TW(255) }, [R(CIRC[i], st), TAB].concat(runs(o, st))));
+    });
+    (q.notes || []).forEach((n) => u1.push(P({ sz: 8, bf: 2, il: TW(170) }, [R("※ " + n, { c: GRAY })])));
+    units.push(u1);
+    let pending = null;                                   // 소제목은 다음 줄과 같은 쪽에
+    (q.x || []).forEach(function (line) {
+      const t = String(line).trim();
+      if (!t) return;
+      let m;
+      const u = pending ? [pending] : [];
+      pending = null;
+      if ((m = t.match(/^#\s*(.*)$/))) { pending = P({ sz: 10, bf: 7, af: 2 }, [R("■ " + m[1], { b: 1, c: BLUE })]); if (u.length) units.push(u); return; }
+      if ((m = t.match(/^-\s+(.*)$/))) u.push(P({ sz: 9.5, il: TW(397), hg: TW(227), af: 1 }, [R("•"), TAB].concat(runs(m[1]))));
+      else if ((m = t.match(/^→\s*(.*)$/))) u.push(P({ sz: 9.5, il: TW(397), af: 1 }, runs("→ " + m[1], { c: GREEN })));
+      else if ((m = t.match(/^([!+])\s*(.*)$/))) {
+        const warn = m[1] === "!";
+        const rs = (warn ? [] : [R("▶ 함께 알기  ", { b: 1, c: BLUE })]).concat(runs(m[2]));
+        u.push(SP(2), { k: "box", w: BODY_W, fill: warn ? "FFF3D1" : "EEF3F8", mt: 2, mb: 2, ml: TW(113), mr: TW(113), items: [P({ sz: 9.5 }, rs)] }, SP(3));
+      } else if (CIRC.indexOf(t.charAt(0)) >= 0) {
+        const ci = CIRC.indexOf(t.charAt(0)), ok = set.indexOf(ci) >= 0 && q.t !== "self";
+        u.push(P({ sz: 9.5, il: TW(397), hg: TW(283), af: 1 }, [R(t.charAt(0), ok ? { b: 1, c: RED } : { b: 1 }), TAB].concat(runs(t.slice(1).trim()))));
+      } else u.push(P({ sz: 9.5, af: 2 }, runs(t)));
+      units.push(u);
+    });
+    if (pending) units.push([pending]);
+    return units;
+  }
+
   // 해설지 덩어리들: 덩어리 안에서는 쪽을 나누지 않는다
-  async function keyUnits(qz, items) {
-    const X = A(), noImg = !!qz.noImg;
+  async function keyUnits(m, items) {
+    const X = A();
     const units = [];
     units.push([P({ sz: 11, af: 3 }, [R("정답", { b: 1, c: BLUE })]), answerGrid(items)]);
     for (const it of items) {
-      const q = it.q, combo = !!q.sx;
+      if (it.exam) { (await examKeyUnits(it)).forEach((u) => units.push(u)); continue; }
+      const q = it.q, combo = !!q.sx, qz = it.qz, noImg = !!qz.noImg;
       const lines = String(q.q).split("\n");
       const stem = lines[0], bogi = lines.slice(1).filter((l) => l.trim());
       // 1) 문항 머리 + 문항 다시 보기
-      const head = [R(it.n + "번", { b: 1, c: BLUE, sz: 12 }), R("     정답 " + CIRC[it.ans], { b: 1, c: RED, sz: 11 })];
+      const head = [R(it.lab + "번", { b: 1, c: BLUE, sz: 12 }), R("     정답 " + CIRC[it.ans], { b: 1, c: RED, sz: 11 })];
       if (combo) head.push(R("  (" + q.o[q.a] + ")", { b: 1, c: RED, sz: 10 }));
+      if (m.type === "mix") head.push(R("     " + qz.week + " " + qz.title, { c: GRAY, sz: 9 }));   // 랜덤: 어느 회차 문항인지
       const u1 = [P({ sz: 12, bf: 14, af: 2, bdr: { sz: 0.75, c: BLUE, sp: 1 } }, head)];
       u1.push(P({ sz: 8.5, bf: 3, af: 1 }, runs(stem, { c: GRAY })));
       const bs = bogi.map(bogiLine), bhg = labelHang(bs, 8.5, {}, TW(227));
@@ -556,37 +711,37 @@
     return { pages: pages };
   }
 
-  function keyFooter(qz, code) { return { left: qz.subject + " " + qz.week + " 해설지", right: "판 " + code }; }
+  function keyFooter(m, code) { return { left: m.name + " 해설지", right: m.shuffle ? "판 " + code : "" }; }
 
-  function keyPagesHTML(L, qz, code) {
-    const ft = keyFooter(qz, code);
-    return L.pages.map(function (pg) {
-      return '<div class="qp-pg qp-font"><div class="qp-body">' + pg.items.map(hItem).join("") + "</div>" + footerHTML(ft) + "</div>";
+  function keyPagesHTML(L, m, code) {
+    const ft = keyFooter(m, code);
+    return L.pages.map(function (pg, k) {
+      return '<div class="qp-pg qp-font"><div class="qp-body">' + pg.items.map(hItem).join("") + "</div>" + footerHTML(ft, k + 1) + "</div>";
     }).join("");
   }
 
-  let pageNo = 0;
-  function footerHTML(ft) {
-    pageNo++;
+  function footerHTML(ft, pageNo) {
     return '<div class="qp-ft"><span class="l">' + esc(ft.left) + '</span><span class="c">- ' + pageNo + ' -</span><span class="r">' + esc(ft.right) + "</span></div>";
   }
 
   // ======================================================================
   // 문서 만들기 (모델 + HTML)
   // ======================================================================
+  // kind: "exam" = 문제지, "key" = 해설지
   async function build(quizId, kind, code) {
-    const qz = A().quiz(quizId);
-    if (!qz) throw new Error("퀴즈 없음: " + quizId);
-    await fontsReady(allText(qz));
-    const items = prepare(qz, code);
-    pageNo = 0;
+    const m = docMeta(quizId);
+    if (!m) throw new Error("퀴즈 없음: " + quizId);
+    const items = docItems(m, code);
+    await fontsReady(JSON.stringify(items.map((it) => it.q)) + m.name + "①②③④⑤■“”‘’0123456789번정답오답옳음틀림쪽강의판인쇄");
     if (kind === "exam") {
-      const L = layoutExam(qz, items, examTitle(qz));
-      return { kind: kind, qz: qz, code: code, L: L, html: examPagesHTML(L, qz, code), nPages: L.pages.length };
+      const units = [];
+      for (const it of items) units.push(it.exam ? await examQuestionX(it) : examQuestion(it));
+      const L = layoutExam(units, examTitle(m));
+      return { kind: kind, qz: m, meta: m, code: code, L: L, html: examPagesHTML(L, m, code), nPages: L.pages.length };
     }
-    const units = await keyUnits(qz, items);
-    const L = layoutKey(units, keyTitle(qz));
-    return { kind: kind, qz: qz, code: code, L: L, html: keyPagesHTML(L, qz, code), nPages: L.pages.length };
+    const units = await keyUnits(m, items);
+    const L = layoutKey(units, keyTitle(m));
+    return { kind: kind, qz: m, meta: m, code: code, L: L, html: keyPagesHTML(L, m, code), nPages: L.pages.length };
   }
 
   // ======================================================================
@@ -659,9 +814,9 @@
   }
   function xBox(b, ctx) {
     return '<w:tbl><w:tblPr><w:tblW w:w="' + tw(b.w) + '" w:type="dxa"/><w:tblInd w:w="0" w:type="dxa"/>' + (b.bdr ? bdrXml("tblBorders", b.bdr) : NOBDR) +
-      '<w:tblLayout w:type="fixed"/><w:tblCellMar>' + mar(b.mt, b.ml, b.mb, b.mr) + '</w:tblCellMar><w:tblLook w:val="0000"/></w:tblPr>' +
+      '<w:tblLayout w:type="fixed"/><w:tblCellMar>' + mar(0, b.ml, 0, b.mr) + '</w:tblCellMar><w:tblLook w:val="0000"/></w:tblPr>' +
       '<w:tblGrid><w:gridCol w:w="' + tw(b.w) + '"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcW w:w="' + tw(b.w) + '" w:type="dxa"/>' +
-      (b.fill ? '<w:shd w:val="clear" w:color="auto" w:fill="' + b.fill + '"/>' : "") + "</w:tcPr>" + xItems(b.items, ctx) + "</w:tc></w:tr></w:tbl>";
+      (b.fill ? '<w:shd w:val="clear" w:color="auto" w:fill="' + b.fill + '"/>' : "") + "</w:tcPr>" + xItems(boxItems(b), ctx) + "</w:tc></w:tr></w:tbl>";
   }
   function xGrid(g, ctx) {
     const W = g.cols.reduce((s, x) => s + tw(x), 0);
@@ -851,8 +1006,8 @@
   }
 
   function fileBase(doc) {
-    const qz = doc.qz, t = titleParts(qz);
-    return qz.subject + " " + qz.week + (t.round ? " " + t.round : "") + " " + (doc.kind === "exam" ? "문제지" : "해설지") + " (판 " + doc.code + ")";
+    const m = doc.meta;
+    return m.name + " " + (doc.kind === "exam" ? "문제지" : "해설지") + (m.shuffle ? " (판 " + doc.code + ")" : "");
   }
 
   // ======================================================================
@@ -891,6 +1046,7 @@
 .qp-bar .seg{display:inline-flex;border:1px solid #6b6661;border-radius:9px;overflow:hidden}
 .qp-bar .seg button{background:transparent;border:0;color:#ddd;padding:6px 12px;font-size:14px}
 .qp-bar .seg button.on{background:#e9e4dd;color:#1d1b19;font-weight:700}
+.qp-bar [hidden]{display:none!important}
 .qp-bar .code{display:inline-flex;align-items:center;gap:6px;font-size:14px}
 .qp-bar .code input{width:5.2em;font:inherit;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:5px 7px;border-radius:7px;border:1px solid #6b6661;background:#fff;color:#1d1b19}
 .qp-bar .b{background:#e9e4dd;color:#1d1b19;border:0;border-radius:9px;padding:7px 12px;font-size:14px;font-weight:600}
@@ -961,14 +1117,15 @@
   async function render() {
     const s = state, my = ++s.seq;
     root.querySelectorAll(".seg button").forEach((b) => b.classList.toggle("on", b.dataset.k === s.kind));
-    busy(true); msg(s.kind === "key" ? "해설지를 만드는 중… (슬라이드 그림을 불러옵니다)" : "문제지를 만드는 중…");
+    busy(true); msg(s.kind === "key" ? "해설지를 만드는 중…" + (s.meta.type === "exam" ? "" : " (슬라이드 그림을 불러옵니다)") : "문제지를 만드는 중…");
     try {
       const doc = await build(s.id, s.kind, s.code);
       if (my !== s.seq) return;
       s.doc = doc;
       root.querySelector(".qp-pages").innerHTML = doc.html;
       fit();
-      msg(doc.nPages + "쪽 · 판 " + s.code + " — 같은 판 번호로 만든 문제지와 해설지는 선지 순서가 같습니다.");
+      msg(doc.nPages + "쪽" + (s.meta.shuffle ? " · 판 " + s.code + " — 같은 판 번호로 만든 문제지와 해설지는 " +
+        (s.meta.type === "mix" ? "문항과 " : "") + "선지 순서가 같습니다." : " — 기출은 선지를 섞지 않습니다."));
     } catch (e) {
       if (my === s.seq) msg("만들지 못했습니다: " + (e && e.message || e));
     }
@@ -1003,13 +1160,16 @@
   function close() { root.hidden = true; root.querySelector(".qp-pages").innerHTML = ""; document.body.style.overflow = ""; }
 
   function open(quizId) {
-    const qz = A().quiz(quizId);
-    if (!qz) return;
+    const m = docMeta(quizId);
+    if (!m) return;
     ensureRoot();
-    state = { id: quizId, kind: "exam", code: savedCode(quizId) || newCode(), seq: 0, doc: null };
+    state = { id: quizId, meta: m, kind: "exam", code: savedCode(quizId) || newCode(), seq: 0, doc: null };
     saveCode(quizId, state.code);
-    root.querySelector(".ttl").textContent = qz.subject + " · " + qz.week + " " + qz.title;
+    root.querySelector(".ttl").textContent = m.subject + " · " + (m.type === "lecture" ? m.qz.week + " " + m.qz.title : m.head);
     root.querySelector(".code input").value = state.code;
+    // 기출은 섞지 않으므로 판 번호가 필요 없다
+    root.querySelector(".code").hidden = !m.shuffle;
+    root.querySelector("[data-a=new]").hidden = !m.shuffle;
     root.hidden = false;
     document.body.style.overflow = "hidden";
     render();
