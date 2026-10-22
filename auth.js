@@ -24,7 +24,8 @@
   function friendly(e) {
     const m = String((e && (e.message || e.code)) || e || "");
     if (/invalid login|invalid-credential|wrong-password|user-not-found|Invalid login credentials|INVALID_LOGIN_CREDENTIALS/i.test(m)) return "ID 또는 비밀번호가 맞지 않습니다.";
-    if (/already registered|already-in-use|User already registered/i.test(m)) return "이미 있는 ID입니다.";
+    if (/already registered|already-in-use|User already registered/i.test(m)) return "이미 있거나 사용할 수 없는 ID입니다(탈퇴한 ID도 다시 쓸 수 없습니다).";
+    if (/banned|탈퇴한 계정/i.test(m)) return "탈퇴한 계정입니다.";
     if (/weak-password|at least 6|Password should be/i.test(m)) return "비밀번호가 너무 짧습니다(8자 이상).";
     if (/requires-recent-login/i.test(m)) return "보안을 위해 다시 로그인한 뒤 바꿔 주세요.";
     if (/network|Failed to fetch/i.test(m)) return "네트워크 오류입니다. 잠시 뒤 다시 시도하세요.";
@@ -51,7 +52,7 @@
       return sb;
     }
     async function loadProfile() {
-      const { data, error } = await sb.from("profiles").select("login_id,name,approved,is_admin,created_at").eq("id", user.id).maybeSingle();
+      const { data, error } = await sb.from("profiles").select("login_id,name,approved,is_admin,created_at,withdrawn_at").eq("id", user.id).maybeSingle();
       if (error) throw error;
       prof = data ? { uid: user.id, loginId: data.login_id, name: data.name, approved: data.approved, isAdmin: data.is_admin, provider: "supabase" } : null;
       return prof;
@@ -84,6 +85,14 @@
         if (e1) throw new Error("지금 비밀번호가 맞지 않습니다.");
         const { error } = await sb.auth.updateUser({ password: newPw });
         if (error) throw error;
+      },
+      // 탈퇴: 비밀번호를 확인한 뒤 서버 함수가 계정을 막는다(로그인 금지). 기록과 ID는 남는다
+      async withdraw(pw) {
+        const { error: e1 } = await sb.auth.signInWithPassword({ email: user.email, password: pw });
+        if (e1) throw new Error("비밀번호가 맞지 않습니다.");
+        const { error } = await sb.rpc("withdraw_me");
+        if (error) throw error;
+        await sb.auth.signOut(); user = null; prof = null;
       },
       async setName(name) {
         const { error } = await sb.from("profiles").update({ name: name }).eq("id", user.id);
@@ -123,9 +132,13 @@
       },
       admin: {
         async listUsers() {
-          const { data, error } = await sb.from("profiles").select("id,login_id,name,approved,is_admin,created_at").order("created_at", { ascending: false });
+          const { data, error } = await sb.from("profiles").select("id,login_id,name,approved,is_admin,created_at,withdrawn_at,purged_at").order("created_at", { ascending: false });
           if (error) throw error;
-          return data.map((r) => ({ uid: r.id, loginId: r.login_id, name: r.name, approved: r.approved, isAdmin: r.is_admin, created: r.created_at }));
+          return data.map((r) => ({ uid: r.id, loginId: r.login_id, name: r.name, approved: r.approved, isAdmin: r.is_admin, created: r.created_at, withdrawn: r.withdrawn_at, purged: r.purged_at }));
+        },
+        async purge(uid) {
+          const { error } = await sb.rpc("admin_purge", { target: uid });
+          if (error) throw error;
         },
         async setApproved(uid, value) {
           const { error } = await sb.rpc("admin_set_approved", { target: uid, value: value });
@@ -159,6 +172,7 @@
       const s = await db.collection("users").doc(user.uid).get();
       const d = s.exists ? s.data() : null;
       prof = d ? { uid: user.uid, loginId: d.loginId, name: d.name, approved: !!d.approved, isAdmin: !!d.isAdmin, provider: "firebase" } : null;
+      if (d && d.withdrawn) { await auth.signOut(); user = null; prof = null; throw new Error("탈퇴한 계정"); }
       return prof;
     }
     const fileDoc = (path) => db.collection("users").doc(user.uid).collection("files").doc(encodeURIComponent(path));
@@ -189,6 +203,15 @@
         await user.updatePassword(newPw);
       },
       async setName(name) { await db.collection("users").doc(user.uid).update({ name: name }); prof.name = name; },
+      // 탈퇴: Firebase는 브라우저에서 계정을 막을 수 없으므로 프로필에 탈퇴 표시를 하고(규칙이 내용 열쇠를 막음, 로그인해도 바로 나감)
+      // 관리자가 기록을 지울 수 있게 기록 파일 목록을 함께 적어 둔다. 로그인 계정은 남으므로 같은 ID로 다시 가입할 수 없다
+      async withdraw(pw) {
+        const cred = window.firebase.auth.EmailAuthProvider.credential(user.email, pw);
+        try { await user.reauthenticateWithCredential(cred); } catch (e) { throw new Error("비밀번호가 맞지 않습니다."); }
+        const files = (await db.collection("users").doc(user.uid).collection("files").get()).docs.map((d) => d.id);
+        await db.collection("users").doc(user.uid).update({ withdrawn: true, approved: false, files: files, withdrawnAt: window.firebase.firestore.FieldValue.serverTimestamp() });
+        await auth.signOut(); user = null; prof = null;
+      },
       profile() { return prof; },
       async contentKey() {
         const s = await db.collection("secrets").doc("content").get();
@@ -223,10 +246,16 @@
       admin: {
         async listUsers() {
           const q = await db.collection("users").get();
-          return q.docs.map(function (d) { const x = d.data(); return { uid: d.id, loginId: x.loginId, name: x.name, approved: !!x.approved, isAdmin: !!x.isAdmin, created: ts(x.createdAt) }; })
+          return q.docs.map(function (d) { const x = d.data(); return { uid: d.id, loginId: x.loginId, name: x.name, approved: !!x.approved, isAdmin: !!x.isAdmin, created: ts(x.createdAt), withdrawn: x.withdrawn ? ts(x.withdrawnAt) || true : null, purged: x.purged ? ts(x.purgedAt) || true : null }; })
             .sort((a, b) => String(b.created).localeCompare(String(a.created)));
         },
         async setApproved(uid, value) { await db.collection("users").doc(uid).update({ approved: value }); },
+        async purge(uid) {
+          const ref = db.collection("users").doc(uid);
+          const s = await ref.get();
+          for (const f of (s.data().files || [])) await ref.collection("files").doc(f).delete();
+          await ref.update({ purged: true, name: "(기록 삭제됨)", files: [], purgedAt: window.firebase.firestore.FieldValue.serverTimestamp() });
+        },
         async listPrintLogs() {
           const q = await db.collection("printLogs").orderBy("at", "desc").limit(500).get();
           return q.docs.map(function (d) { const x = d.data(); return { loginId: x.loginId, name: x.name, quizId: x.quizId, title: x.title, kind: x.kind, fmt: x.fmt, code: x.code, at: ts(x.at) }; });
@@ -256,11 +285,13 @@
       async signIn(id, pw) {
         const u = Object.values(db().users).find((x) => x.loginId === id && x.pwcheck === pw);
         if (!u) throw new Error("Invalid login credentials");
+        if (u.withdrawn) throw new Error("User is banned");
         localStorage.setItem("mq_mock_uid", u.uid); prof = pf(u); return prof;
       },
       async signOut() { localStorage.removeItem("mq_mock_uid"); prof = null; },
       async changePassword(o, n) { const d = db(); const u = d.users[prof.uid]; if (u.pwcheck !== o) throw new Error("지금 비밀번호가 맞지 않습니다."); u.pwcheck = n; put(d); },
       async setName(name) { const d = db(); d.users[prof.uid].name = name; put(d); prof.name = name; },
+      async withdraw(pw) { const d = db(); const u = d.users[prof.uid]; if (u.pwcheck !== pw) throw new Error("비밀번호가 맞지 않습니다."); u.withdrawn = new Date().toISOString(); u.approved = false; put(d); localStorage.removeItem("mq_mock_uid"); prof = null; },
       profile() { return prof; },
       async contentKey() { return me() && me().approved ? localStorage.getItem("mq_mock_key") : null; },
       store: {
@@ -270,8 +301,9 @@
       },
       async logPrint(e) { const d = db(); d.logs.unshift(Object.assign({ loginId: prof.loginId, name: prof.name, at: new Date().toISOString() }, e)); put(d); },
       admin: {
-        async listUsers() { return Object.values(db().users).map((u) => ({ uid: u.uid, loginId: u.loginId, name: u.name, approved: u.approved, isAdmin: u.isAdmin, created: u.created })); },
-        async setApproved(uid, v) { const d = db(); d.users[uid].approved = v; put(d); },
+        async listUsers() { return Object.values(db().users).map((u) => ({ uid: u.uid, loginId: u.loginId, name: u.name, approved: u.approved, isAdmin: u.isAdmin, created: u.created, withdrawn: u.withdrawn || null, purged: u.purged || null })); },
+        async setApproved(uid, v) { const d = db(); if (d.users[uid].withdrawn) throw new Error("탈퇴한 계정"); d.users[uid].approved = v; put(d); },
+        async purge(uid) { const d = db(); if (!d.users[uid].withdrawn) throw new Error("탈퇴하지 않은 계정"); delete d.files[uid]; d.users[uid].purged = new Date().toISOString(); d.users[uid].name = "(기록 삭제됨)"; put(d); },
         async listPrintLogs() { return db().logs; }
       }
     };
@@ -303,6 +335,8 @@
   const CSS = `
 .au-btn{white-space:nowrap;border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:999px;padding:6px 14px;font-weight:600}
 .au-btn.pri{background:var(--accent);border-color:var(--accent);color:#fff}
+.au-btn.au-danger{background:var(--bad);border-color:var(--bad);color:#fff}
+.au-wd summary{cursor:pointer;color:var(--ink-3);font-size:14px}
 .au-ov{position:fixed;inset:0;z-index:300;background:rgba(10,10,10,.55);display:grid;place-items:center;padding:16px}
 .au-ov[hidden]{display:none}
 .au-box{width:min(420px,100%);max-height:calc(100vh - 32px);overflow:auto;background:var(--surface);color:var(--ink);border-radius:16px;box-shadow:var(--shadow);padding:22px 22px 18px;position:relative}
@@ -329,6 +363,8 @@
 .au-pill.ok{background:var(--ok-soft);color:var(--ok)}.au-pill.wait{background:var(--bad-soft);color:var(--bad)}
 #authBtn{max-width:8em;overflow:hidden;text-overflow:ellipsis}
 @media (max-width:640px){.topbar{padding-left:10px;padding-right:10px;gap:6px}.brand-text{display:none}.topnav{gap:2px}.topnav .navbtn{padding:6px 8px}#authBtn{padding:6px 10px;max-width:6em}.sync-chip{font-size:11px;padding:4px 8px}}
+@media (max-width:420px){#authBtn{padding:6px 8px;max-width:4.6em;font-size:13.5px}.sync-chip{padding:3px 6px}}
+@media (max-width:370px){.sync-chip{display:none}}
 `;
   let ov = null, cssOn = false;
   function ensureCss() { if (cssOn) return; cssOn = true; const st = document.createElement("style"); st.textContent = CSS; document.head.appendChild(st); }
@@ -374,7 +410,7 @@
 
   function login(reason) {
     const state = { p: lastProv() };
-    const box = show('<h2>로그인</h2><p class="sub">' + esc(reason || "로그인하면 강의 퀴즈와 기출 문항을 볼 수 있습니다.") + "</p>" + provSeg(state.p) +
+    const box = show('<h2>로그인</h2><p class="sub">' + esc(reason || "사이트 이용을 위해 로그인해주십시오.") + "</p>" + provSeg(state.p) +
       '<form class="au-f"><label>ID<input name="id" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>' +
       '<label>비밀번호<input name="pw" type="password" autocomplete="current-password" required></label>' +
       '<div class="au-msg"></div><div class="row"><button type="button" class="au-link" data-go="signup">계정 만들기</button><button class="au-btn pri" type="submit">로그인</button></div>' +
@@ -455,7 +491,12 @@
       '<label>새 비밀번호 (8자 이상)<input name="pw" type="password" autocomplete="new-password" required></label>' +
       '<label>새 비밀번호 확인<input name="pw2" type="password" autocomplete="new-password" required></label>' +
       '<div class="au-msg"></div><div class="row"><button class="au-btn pri" type="submit">비밀번호 바꾸기</button></div></form>' +
-      '<div class="au-sec au-f"><div class="row" style="justify-content:space-between"><button type="button" class="au-link" data-go="sec">비밀번호는 어떻게 보호되나요?</button><button type="button" class="au-btn" data-a="out">로그아웃</button></div></div>');
+      '<div class="au-sec au-f"><div class="row" style="justify-content:space-between"><button type="button" class="au-link" data-go="sec">비밀번호는 어떻게 보호되나요?</button><button type="button" class="au-btn" data-a="out">로그아웃</button></div></div>' +
+      '<details class="au-sec au-wd"><summary>회원 탈퇴</summary>' +
+      '<p class="sub" style="margin:8px 0">탈퇴하면 이 계정으로 다시 로그인할 수 없고, <b>같은 ID로 다시 가입할 수도 없습니다</b>. 응시 기록은 지워지지 않고 서버에 남습니다(관리자가 지울 수 있습니다).</p>' +
+      '<form class="au-f" data-f="wd"><label>비밀번호 확인<input name="pw" type="password" autocomplete="current-password" required></label>' +
+      '<label style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" name="ok" required style="width:auto"> 위 내용을 확인했습니다.</label>' +
+      '<div class="au-msg"></div><div class="row"><button class="au-btn au-danger" type="submit">탈퇴하기</button></div></form></details>');
     box.querySelector("[data-f=name]").onsubmit = async function (e) {
       e.preventDefault(); const m = e.target.querySelector(".au-msg");
       try { await get(cur).setName(e.target.name.value.trim()); m.className = "au-msg ok"; m.textContent = "저장했습니다."; headerButton(); } catch (err) { m.className = "au-msg"; m.textContent = friendly(err); }
@@ -471,6 +512,17 @@
     };
     box.querySelector("[data-go=sec]").onclick = security;
     box.querySelector("[data-a=out]").onclick = signOut;
+    box.querySelector("[data-f=wd]").onsubmit = async function (e) {
+      e.preventDefault(); const f = e.target, m = f.querySelector(".au-msg");
+      if (!confirm("정말 탈퇴할까요? 되돌릴 수 없습니다.")) return;
+      m.className = "au-msg"; m.textContent = "탈퇴 처리 중…";
+      try {
+        await get(cur).withdraw(f.pw.value);
+        try { localStorage.removeItem(LS_PROV); } catch (err) { /* ignore */ }
+        alert("탈퇴했습니다. 그동안 이용해 주셔서 감사합니다.");
+        close(); location.reload();
+      } catch (err) { m.textContent = friendly(err); }
+    };
   }
 
   async function signOut() {
@@ -530,6 +582,7 @@
       signIn: async function (name, id, pw) { const p = await get(name).signIn(id, pw); if (!p || !p.isAdmin) throw new Error("이 방식의 관리자 계정이 아닙니다."); return p; },
       listUsers: (name) => get(name).admin.listUsers(),
       setApproved: (name, uid, v) => get(name).admin.setApproved(uid, v),
+      purge: (name, uid) => get(name).admin.purge(uid),
       listPrintLogs: (name) => get(name).admin.listPrintLogs()
     }
   };

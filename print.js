@@ -966,7 +966,7 @@
       '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>' +
       '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/></Relationships>');
     add("docProps/core.xml", '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" ' +
-      'xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>' + xesc(fileBase(doc)) + "</dc:title><dc:creator>의대 강의 퀴즈</dc:creator></cp:coreProperties>");
+      'xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>' + xesc(fileBase(doc)) + "</dc:title><dc:creator>KU MedQ</dc:creator></cp:coreProperties>");
     add("word/document.xml", docXml);
     add("word/styles.xml", stylesXml());
     add("word/settings.xml", settingsXml(titlePg));

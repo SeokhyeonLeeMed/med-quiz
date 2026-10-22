@@ -17,8 +17,9 @@
   --radius: 14px;
   --font: "Noto Sans KR", "Noto Sans", "Apple SD Gothic Neo", system-ui, sans-serif;
 }
+/* 다크 모드: 기기 설정을 따르되(자동), 사용자가 고르면 그것을 따른다(html[data-theme]) */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #161514;
     --surface: #1f1d1c;
     --surface-2: #2a2826;
@@ -34,8 +35,28 @@
     --bad-soft: #3b1f1d;
     --quote: #262422;
     --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 16px rgba(0,0,0,.3);
+    color-scheme: dark;
   }
 }
+:root[data-theme="dark"] {
+  --bg: #161514;
+  --surface: #1f1d1c;
+  --surface-2: #2a2826;
+  --ink: #eeeae5;
+  --ink-2: #b6afa7;
+  --ink-3: #847d76;
+  --line: #34312e;
+  --accent: #e0707f;
+  --accent-soft: #3a2226;
+  --ok: #5fcf95;
+  --ok-soft: #1c3226;
+  --bad: #ff8a80;
+  --bad-soft: #3b1f1d;
+  --quote: #262422;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 16px rgba(0,0,0,.3);
+  color-scheme: dark;
+}
+
 
 * { box-sizing: border-box; }
 html, body { margin: 0; }
@@ -372,3 +393,18 @@ body.locked .topbar { display: none; }
 .figs { display: flex; flex-direction: column; gap: 10px; margin: 0 0 16px; }
 .thumb.figimg { width: auto; max-width: 100%; align-self: flex-start; padding: 8px; background: #fff; border-radius: 10px; }
 .thumb.figimg img { display: block; max-width: 100%; max-height: 420px; width: auto; height: auto; object-fit: contain; }
+
+/* 화면 모드 버튼, 휴대폰에서는 저장 칩의 시각을 숨겨 자리를 아낀다 */
+.theme-btn { display: inline-grid; place-items: center; padding: 6px 9px; }
+@media (max-width: 640px) {
+  .chip-t { display: none; }
+  .theme-btn { padding: 6px 7px; }
+}
+@media (max-width: 420px) {
+  .topbar { gap: 4px; }
+  .brand-mark { width: 30px; height: 30px; font-size: 13px; border-radius: 8px; }
+  .topnav .navbtn { padding: 6px 6px; font-size: 13.5px; }
+  .theme-btn { padding: 6px 5px; }
+  .sync-chip { padding: 3px 6px; font-size: 11px; }
+  #authBtn { max-width: 5em; padding: 6px 8px; font-size: 13.5px; }
+}

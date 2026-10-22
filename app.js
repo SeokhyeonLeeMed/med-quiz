@@ -826,7 +826,7 @@
       pickerHTML();
     if (locked) {
       const u = window.QuizAuth && window.QuizAuth.user();
-      html += '<div class="card resume"><div>' + (u ? "<b>승인 대기 중</b> — 관리자가 승인하면 문항을 볼 수 있습니다." : "<b>목록만 보입니다</b> — 로그인하면 문항을 풀고 인쇄할 수 있습니다.") + "</div>" +
+      html += '<div class="card resume"><div>' + (u ? "<b>승인 대기 중</b> — 관리자가 승인하면 문항을 볼 수 있습니다." : "사이트 이용을 위해 로그인해주시기 바랍니다.") + "</div>" +
         '<div><button class="btn small primary" data-act="login">' + (u ? "승인 확인" : "로그인") + "</button></div></div>";
     }
 
@@ -1104,6 +1104,37 @@
       .slice(0, 3).map(function (k) { return { key: k, s: stat[k] }; });
   }
 
+  // ---------- 화면 모드 ----------
+  // 자동(기기 설정) → 라이트 → 다크. 고른 값은 이 브라우저에 기억한다(index.html 머리의 짧은 스크립트가 처음부터 입힘)
+  const THEMES = [["auto", "자동(기기 설정)"], ["light", "라이트"], ["dark", "다크"]];
+  function curTheme() { const t = document.documentElement.getAttribute("data-theme"); return t === "light" || t === "dark" ? t : "auto"; }
+  function themeIcon(t) {
+    return t === "light" ? '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="4.5" fill="currentColor"/><g stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/></g></svg>'
+      : t === "dark" ? '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" fill="currentColor"/></svg>'
+      : '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor"/></svg>';
+  }
+  function setupTheme() {
+    const nav = document.querySelector(".topnav");
+    if (!nav || document.getElementById("themeBtn")) return;
+    const b = document.createElement("button");
+    b.type = "button"; b.id = "themeBtn"; b.className = "navbtn theme-btn";
+    const paint = function () {
+      const t = curTheme(), name = THEMES.find(function (x) { return x[0] === t; })[1];
+      b.innerHTML = themeIcon(t);
+      b.title = "화면: " + name + " — 눌러서 바꾸기"; b.setAttribute("aria-label", b.title);
+    };
+    b.onclick = function () {
+      const i = THEMES.findIndex(function (x) { return x[0] === curTheme(); });
+      const next = THEMES[(i + 1) % THEMES.length][0];
+      if (next === "auto") document.documentElement.removeAttribute("data-theme"); else document.documentElement.setAttribute("data-theme", next);
+      try { if (next === "auto") localStorage.removeItem("mq_theme"); else localStorage.setItem("mq_theme", next); } catch (e) { /* ignore */ }
+      paint();
+    };
+    paint();
+    nav.insertBefore(b, nav.firstChild);
+  }
+  setupTheme();
+
   // ---------- 관리자 ----------
   // 사용자(승인·승인 취소), 인쇄 기록, 사이트 수정 기록. 비밀번호와 응시 기록은 관리자에게도 보이지 않는다(서버 규칙)
   function addAdminNav() {
@@ -1130,7 +1161,7 @@
       body.innerHTML = ch.length ? '<div class="stack">' + ch.map(function (c) {
         return '<div class="card"><b>' + esc(fmtTs(c.t)) + "</b>" + (c.summary ? ' <span class="hint">' + esc(c.summary) + "</span>" : "") +
           '<ul class="xl">' + (c.items || []).map(function (x) { return "<li>" + esc(x) + "</li>"; }).join("") + "</ul></div>";
-      }).join("") + "</div>" : '<p class="empty">아직 기록이 없다.</p>';
+      }).join("") + "</div>" : '<p class="empty">아직 기록이 없습니다.</p>';
       return;
     }
     let out = "";
@@ -1147,13 +1178,17 @@
       try {
         if (tab === "users") {
           const us = await QA.admin.listUsers(p);
-          us.sort(function (a, b) { return (a.approved ? 1 : 0) - (b.approved ? 1 : 0); });
+          // 승인 대기 → 승인됨 → 탈퇴 순
+          const rank = function (u) { return u.withdrawn ? 2 : u.approved ? 1 : 0; };
+          us.sort(function (a, b) { return rank(a) - rank(b); });
           out += '<div class="table-wrap"><table class="hist"><thead><tr><th>ID</th><th>이름</th><th>가입</th><th>상태</th><th></th></tr></thead><tbody>' +
             us.map(function (u) {
               const self = u.uid === sess.uid;
               return "<tr><td>" + esc(u.loginId) + (u.isAdmin ? ' <span class="badge">관리자</span>' : "") + "</td><td>" + esc(u.name) + "</td><td>" + esc(fmtTs(u.created)) + "</td>" +
-                "<td>" + (u.approved ? "승인됨" : "<b>승인 대기</b>") + "</td><td>" +
-                (self ? "" : '<button class="btn small' + (u.approved ? "" : " primary") + '" type="button" data-ap="' + p + '" data-uid="' + esc(u.uid) + '" data-v="' + (u.approved ? "0" : "1") + '">' + (u.approved ? "승인 취소" : "승인") + "</button>") +
+                "<td>" + (u.purged ? '탈퇴 · 기록 삭제됨' : u.withdrawn ? "탈퇴" + (typeof u.withdrawn === "string" ? ' <span class="hint">' + esc(fmtTs(u.withdrawn)) + "</span>" : "") : u.approved ? "승인됨" : "<b>승인 대기</b>") + "</td><td>" +
+                (self || u.purged ? "" : u.withdrawn
+                  ? '<button class="btn small" type="button" data-purge="' + p + '" data-uid="' + esc(u.uid) + '" data-who="' + esc(u.loginId) + '">기록 삭제</button>'
+                  : '<button class="btn small' + (u.approved ? "" : " primary") + '" type="button" data-ap="' + p + '" data-uid="' + esc(u.uid) + '" data-v="' + (u.approved ? "0" : "1") + '">' + (u.approved ? "승인 취소" : "승인") + "</button>") +
                 "</td></tr>";
             }).join("") + "</tbody></table></div>";
         } else {
@@ -1162,16 +1197,24 @@
             ls.map(function (l) {
               return "<tr><td>" + esc(fmtTs(l.at)) + "</td><td>" + esc(l.loginId) + "</td><td>" + esc(l.name) + "</td><td>" + esc(l.title || l.quizId) + " " + (l.kind === "key" ? "해설지" : "문제지") + "</td>" +
                 "<td>" + (l.fmt === "docx" ? "Word 파일" : "인쇄·PDF") + "</td><td>" + esc(l.code || "") + "</td></tr>";
-            }).join("") + "</tbody></table></div>" : '<p class="empty">인쇄 기록이 없다.</p>';
+            }).join("") + "</tbody></table></div>" : '<p class="empty">인쇄 기록이 없습니다.</p>';
         }
-      } catch (e) { out += '<p class="hint">불러오지 못했다: ' + esc(e && e.message || e) + "</p>"; }
+      } catch (e) { out += '<p class="hint">불러오지 못했습니다: ' + esc(e && e.message || e) + "</p>"; }
     }
     body.innerHTML = out;
     body.querySelectorAll("[data-ap]").forEach(function (b) {
       b.onclick = async function () {
         b.disabled = true;
         try { await QA.admin.setApproved(b.dataset.ap, b.dataset.uid, b.dataset.v === "1"); renderAdmin(tab); }
-        catch (e) { alert("바꾸지 못했다: " + (e && e.message || e)); b.disabled = false; }
+        catch (e) { alert("바꾸지 못했습니다: " + (e && e.message || e)); b.disabled = false; }
+      };
+    });
+    body.querySelectorAll("[data-purge]").forEach(function (b) {
+      b.onclick = async function () {
+        if (!confirm("탈퇴한 " + b.dataset.who + " 님의 응시 기록을 지웁니다. 되돌릴 수 없습니다.\n(계정은 막힌 채 남아 이 ID로 다시 가입할 수 없습니다. 인쇄 기록은 남습니다.)")) return;
+        b.disabled = true;
+        try { await QA.admin.purge(b.dataset.purge, b.dataset.uid); renderAdmin(tab); }
+        catch (e) { alert("지우지 못했습니다: " + (e && e.message || e)); b.disabled = false; }
       };
     });
     body.querySelectorAll(".adm-login").forEach(function (f) {
@@ -1246,7 +1289,7 @@
       el.hidden = !enabled();
       el.className = "sync-chip " + state;
       const t = lastOk ? new Date(lastOk) : null;
-      el.textContent = state === "ok" ? "저장됨" + (t ? " " + String(t.getHours()).padStart(2, "0") + ":" + String(t.getMinutes()).padStart(2, "0") : "")
+      el.innerHTML = state === "ok" ? "저장됨" + (t ? '<span class="chip-t"> ' + String(t.getHours()).padStart(2, "0") + ":" + String(t.getMinutes()).padStart(2, "0") + "</span>" : "")
         : state === "busy" ? "저장 중…" : state === "err" ? "저장 실패 — 다시 시도" : "동기화";
       el.title = msg || "응시 기록 동기화";
     }
@@ -1462,7 +1505,7 @@
   // 로그인 전: 누르면 로그인 창(가입했지만 승인 전이면 승인 대기 안내)
   function askLogin() {
     if (!window.QuizAuth || !window.QuizAuth.enabled()) return;
-    if (window.QuizAuth.user()) window.QuizAuth.pending(); else window.QuizAuth.login("로그인하면 문항을 풀고 인쇄할 수 있습니다.");
+    if (window.QuizAuth.user()) window.QuizAuth.pending(); else window.QuizAuth.login("사이트 이용을 위해 로그인해주십시오.");
   }
   const chipEl = document.getElementById("syncChip");
   if (chipEl) chipEl.onclick = function () { Sync.request(rerender); };
