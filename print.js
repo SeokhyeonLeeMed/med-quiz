@@ -163,8 +163,9 @@
     const w = Math.max.apply(null, [0].concat(bs.filter((b) => b.lab).map((b) => textWidth([R(b.lab, st)], sz))));
     return Math.max(base, Math.ceil((w + 3) * 20) / 20);
   }
+  const BOGI_LINE = /^(?:[ㄱ-ㅎ]|[가나다라마바사아자차카타파하]|[A-Ha-h]|IV|V|I{1,3})[.)]\s|^\([가나다라마바사아자차카타파하]\)\s/;
   function bogiLine(l) {
-    const m = String(l).match(/^((?:[ㄱ-ㅎ]|IV|V|I{1,3}|[A-Ha-h])[.)]|\([가-하]\))\s*(.*)$/);
+    const m = String(l).match(/^((?:[ㄱ-ㅎ]|[가나다라마바사아자차카타파하]|IV|V|I{1,3}|[A-Ha-h])[.)]|\([가-하]\))\s*(.*)$/);
     return m ? { lab: m[1], text: m[2] } : { lab: "", text: l };
   }
 
@@ -413,10 +414,13 @@
   // 기출 발문 나누기(사이트와 같은 규칙): 빈 줄 = 문단 구분, [공통 지문] = 지문 상자, | a / b | = 보기 상자, [그림]·[표] = 잘라 둔 그림
   function examStemParts(q) {
     const parts = [];
-    let para = [];
+    let para = [], box = null;
     const flush = function () { if (para.length) { parts.push({ k: "p", t: para.join("\n") }); para = []; } };
     String(q.q).split("\n").forEach(function (l) {
       const t = l.trim();
+      // 이어지는 보기 줄(ㄱ. 가. A. I. (가) …)은 보기 상자 하나로
+      if (t && BOGI_LINE.test(t)) { flush(); if (!box) { box = { k: "bogi", lines: [] }; parts.push(box); } box.lines.push(t); return; }
+      box = null;
       if (!t) { flush(); return; }
       if (t.indexOf("[공통 지문]") === 0) { flush(); parts.push({ k: "shared", t: t.replace("[공통 지문]", "").trim() }); return; }
       if (t.charAt(0) === "|") { flush(); parts.push({ k: "bogi", lines: t.replace(/^\|\s*|\s*\|$/g, "").split(" / ") }); return; }

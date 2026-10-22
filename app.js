@@ -670,18 +670,23 @@
   }
 
   // 기출 발문: [공통 지문], | 표 |, [그림] 줄을 따로 그린다
+  // 보기 줄: ㄱ. 가. A. a) I. (가) 로 시작하는 줄. 이어지는 보기 줄은 보기 상자 하나에 담는다
+  const BOGI_LINE = /^(?:[ㄱ-ㅎ]|[가나다라마바사아자차카타파하]|[A-Ha-h]|IV|V|I{1,3})[.)]\s|^\([가나다라마바사아자차카타파하]\)\s/;
   function examStemHTML(r, num) {
     const q = r.q;
     const lines = String(q.q).split(NL);
-    let out = "", first = true, para = [], figShown = false;
+    let out = "", first = true, para = [], figShown = false, box = [];
     function flush() {
       if (!para.length) return;
       const txt = para.join(NL);
       out += first ? '<p class="qtext">' + num + ". " + fmt(txt) + "</p>" : '<p class="qmore">' + fmt(txt) + "</p>";
       first = false; para = [];
     }
+    function flushBox() { if (box.length) { out += '<div class="bogi">' + fmt(box.join(NL)) + "</div>"; box = []; } }
     lines.forEach(function (ln) {
       const t = ln.trim();
+      if (t && BOGI_LINE.test(t)) { flush(); box.push(t); return; }
+      flushBox();
       if (!t) { flush(); return; }
       if (t.indexOf("[공통 지문]") === 0) { flush(); out += '<div class="shared">' + fmt(t.replace("[공통 지문]", "").trim()) + "</div>"; return; }
       if (t.charAt(0) === "|") {
@@ -708,7 +713,7 @@
       }
       para.push(t);
     });
-    flush();
+    flush(); flushBox();
     return out;
   }
 
@@ -900,7 +905,7 @@
           (t === "multi" ? ' <span class="badge">' + answerSet(q).length + "개 고르기</span>" : "") +
           (t === "self" ? ' <span class="badge">스스로 채점</span>' : "") + "</div>" : "");
 
-    if (exam) html += examStemHTML(r, num);
+    if (exam) html += examStemHTML(r, esc(String(r.q.label || r.q.n)));   // 기출은 시험 문항 번호(복기 안 된 번호는 건너뛴다)
     if (exam && q.notes && q.notes.length) html += '<div class="xnote">' + q.notes.map(function (n) { return "<div>" + fmt(n) + "</div>"; }).join("") + "</div>";
     if (!exam) html += '<p class="qtext">' + num + ". " + fmt(stemOf(q.q)) + "</p>" + (bogiOf(q.q) ? '<div class="bogi">' + fmt(bogiOf(q.q)) + "</div>" : "");
 
