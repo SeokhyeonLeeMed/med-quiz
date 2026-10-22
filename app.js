@@ -233,7 +233,7 @@
       page = +sp[1];
     }
     const qz = BY_ID[id] || DOCS[id];
-    const sid = id.split("-")[0], lec = id.slice(sid.length + 1);
+    const sid = id.split("-")[0], lec = (qz && qz.imgLec) || id.slice(sid.length + 1);   // 기출 보완판은 원본의 시험지 그림을 쓴다
     const pp = String(page).padStart(2, "0");
     const subjName = SUBJ[sid] ? SUBJ[sid].name : sid;
     const exam = isExam(qz);
@@ -759,9 +759,10 @@
   }
 
   // 한 주차에 회차(1회·2회…)가 여럿이면 카드 하나에 묶는다
-  function weekGroupCard(list) {
+  // 기출은 판(복기 원본 / Claude 보완)을 한 카드에 묶는다
+  function weekGroupCard(list, exam) {
     const first = list[0];
-    const base = first.title.replace(/ \d+회$/, "");
+    const base = exam ? first.title.replace(/ \(Claude 보완\)$/, "") : first.title.replace(/ \d+회$/, "");
     const rows = list.map(function (meta) {
       const fa = fullAttempts(meta.id);
       const last = lastAttempt(meta.id);
@@ -769,7 +770,7 @@
       const wrongN = last ? last.items.filter(function (i) { return !i.correct; }).length : 0;
       const m = meta.title.match(/(\d+회)$/);
       return '<div class="round">' +
-        '<div class="round-info"><b>' + esc(m ? m[1] : meta.title) + "</b>" +
+        '<div class="round-info"><b>' + esc(exam ? meta.ver || meta.title : m ? m[1] : meta.title) + "</b>" +
           '<span class="meta"><span>' + meta.questions.length + "문항</span>" +
           (fa.length ? "<span>응시 <b>" + fa.length + "</b>회</span><span>최근 <b>" + pct(fa[fa.length - 1]) + "%</b></span><span>최고 <b>" + best + "%</b></span>" : "<span>응시 기록 없음</span>") +
           "</span>" + (fa.length ? sparkSVG(fa.map(pct)) : "") + "</div>" +
@@ -780,7 +781,7 @@
         "</div>" +
       "</div>";
     }).join("");
-    return '<div class="card quiz-card group">' +
+    return '<div class="card quiz-card group' + (exam ? " exam" : "") + '">' +
       '<div class="wk">' + esc(first.week + (first.prof ? " · " + first.prof : "")) + "</div>" +
       '<div class="ttl">' + esc(base) + "</div>" + rows + "</div>";
   }
@@ -838,7 +839,11 @@
       }
       if (eq.length) {
         html += '<h3 class="sec">기출 문제 <span class="hint">해설지 원고 기반 · 서술형·복기 실패 문항은 해설을 보고 스스로 채점</span></h3>' +
-          '<div class="quiz-grid">' + eq.map(function (qz) { return quizCard(qz, qz.questions.length); }).join("") + "</div>";
+          '<div class="quiz-grid">' + (function () {
+            const groups = [], byBase = {};
+            eq.forEach(function (qz) { const k = qz.base || qz.id; if (!byBase[k]) { byBase[k] = []; groups.push(byBase[k]); } byBase[k].push(qz); });
+            return groups.map(function (g) { return g.length > 1 ? weekGroupCard(g, true) : quizCard(g[0], g[0].questions.length); }).join("");
+          })() + "</div>";
       }
     }
 
@@ -891,7 +896,7 @@
       '<div class="card qcard">' +
         (showSrc ? '<div class="qsrc">' + esc((exam ? "기출 " : r.quiz.week + " · ") + r.quiz.title) + " · " + esc(qNumLabel(r)) +
           (q.pf ? ' <span class="badge pf">출제 ' + esc(q.pf) + " 교수님</span>" : "") +
-          (q.alt ? ' <span class="badge alt">Claude 추가본</span>' : "") +
+          (q.alt ? ' <span class="badge alt">Claude 보완</span>' : "") +
           (t === "multi" ? ' <span class="badge">' + answerSet(q).length + "개 고르기</span>" : "") +
           (t === "self" ? ' <span class="badge">스스로 채점</span>' : "") + "</div>" : "");
 

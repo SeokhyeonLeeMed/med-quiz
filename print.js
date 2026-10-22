@@ -397,7 +397,7 @@
     }
     return out;
   }
-  // 문항 번호 칸: 번호("31 보완." 등)가 칸보다 넓으면 넓힌다
+  // 문항 번호 칸: 번호가 칸보다 넓으면 넓힌다
   function numHang(lab) { return Math.max(15.6, Math.ceil((textWidth([R(lab + ".", { b: 1 })], 9.5) + 3) * 20) / 20); }
 
   function examQuestion(it) {
@@ -442,12 +442,14 @@
     }
     return out;
   }
+  // Claude가 보완한 기출 문항 표시
+  function altMark(q) { return q.alt ? [R("(Claude 보완) ", { b: 1, c: GRAY })] : []; }
   async function examQuestionX(it) {
     const q = it.q, hg = numHang(it.lab), out = [];
     let numbered = false;
     for (const p of examStemParts(q)) {
       if (p.k === "p") {
-        out.push(numbered ? P({ sz: 9.5, il: hg, bf: 3 }, runs(p.t)) : P({ sz: 9.5, il: hg, hg: hg }, [R(it.lab + ".", { b: 1 }), TAB].concat(runs(p.t))));
+        out.push(numbered ? P({ sz: 9.5, il: hg, bf: 3 }, runs(p.t)) : P({ sz: 9.5, il: hg, hg: hg }, [R(it.lab + ".", { b: 1 }), TAB].concat(altMark(q), runs(p.t))));
         numbered = true;
       } else if (p.k === "shared") {
         pushBlock(out, { k: "box", w: COL_W, fill: "F5F5F5", bdr: { sz: 0.5, c: "808080" }, mt: 2, mb: 2, ml: 5.4, mr: 5.4, items: [P({ sz: 9 }, runs(p.t))] });
@@ -455,7 +457,7 @@
         pushBlock(out, bogiBox(p.lines, COL_W));
       } else (await figItems(q, COL_W - hg - 2, hg)).forEach((x) => out.push(x));
     }
-    if (!numbered) out.unshift(P({ sz: 9.5, il: hg, hg: hg }, [R(it.lab + ".", { b: 1 })]));
+    if (!numbered) out.unshift(P({ sz: 9.5, il: hg, hg: hg }, [R(it.lab + ".", { b: 1 }), TAB].concat(altMark(q))));
     const last = out[out.length - 1];
     if (q.o && q.o.length) {
       if (last.k === "p") { last.af = 12; return out.concat(optionParas(it, 0)); }
@@ -552,6 +554,7 @@
   async function examKeyUnits(it) {
     const q = it.q, units = [], set = it.ansSet || [];
     const head = [R(it.lab + "번", { b: 1, c: BLUE, sz: 12 }), R("     정답 " + (q.h || it.ansText), { b: 1, c: RED, sz: 11 })];
+    if (q.alt) head.push(R("     Claude 보완", { b: 1, c: GRAY, sz: 9 }));
     if (q.pf) head.push(R("     " + q.pf + " 교수", { c: GRAY, sz: 9 }));
     const u1 = [P({ sz: 12, bf: 14, af: 2, bdr: { sz: 0.75, c: BLUE, sp: 1 } }, head)];
     let firstP = true;
