@@ -140,6 +140,15 @@
           const { error } = await sb.rpc("admin_purge", { target: uid });
           if (error) throw error;
         },
+        async getAutoApprove() {
+          const { data, error } = await sb.from("app_settings").select("auto_approve").eq("id", 1).maybeSingle();
+          if (error) throw error;
+          return !!(data && data.auto_approve);
+        },
+        async setAutoApprove(v) {
+          const { error } = await sb.rpc("admin_set_auto_approve", { value: v });
+          if (error) throw error;
+        },
         async setApproved(uid, value) {
           const { error } = await sb.rpc("admin_set_approved", { target: uid, value: value });
           if (error) throw error;
@@ -188,7 +197,9 @@
         await client();
         const cred = await auth.createUserWithEmailAndPassword(emailOf(id), pw);
         user = cred.user;
-        await db.collection("users").doc(user.uid).set({ loginId: id, name: name, approved: false, isAdmin: false, createdAt: window.firebase.firestore.FieldValue.serverTimestamp() });
+        let auto = false;
+        try { const st = await db.collection("settings").doc("signup").get(); auto = !!(st.exists && st.data().autoApprove); } catch (e) { auto = false; }
+        await db.collection("users").doc(user.uid).set({ loginId: id, name: name, approved: auto, isAdmin: false, createdAt: window.firebase.firestore.FieldValue.serverTimestamp() });
         return loadProfile();
       },
       async signIn(id, pw) {
@@ -256,6 +267,8 @@
           for (const f of (s.data().files || [])) await ref.collection("files").doc(f).delete();
           await ref.update({ purged: true, name: "(기록 삭제됨)", files: [], purgedAt: window.firebase.firestore.FieldValue.serverTimestamp() });
         },
+        async getAutoApprove() { const s = await db.collection("settings").doc("signup").get(); return !!(s.exists && s.data().autoApprove); },
+        async setAutoApprove(v) { await db.collection("settings").doc("signup").set({ autoApprove: !!v }); },
         async listPrintLogs() {
           const q = await db.collection("printLogs").orderBy("at", "desc").limit(500).get();
           return q.docs.map(function (d) { const x = d.data(); return { loginId: x.loginId, name: x.name, quizId: x.quizId, title: x.title, kind: x.kind, fmt: x.fmt, code: x.code, at: ts(x.at) }; });
@@ -279,7 +292,7 @@
         const d = db();
         if (Object.values(d.users).some((u) => u.loginId === id)) throw new Error("User already registered");
         const uid = "u" + Math.random().toString(36).slice(2, 9);
-        d.users[uid] = { uid: uid, loginId: id, name: name, pw: "hash:" + pw.length, approved: id === "admin", isAdmin: id === "admin", created: new Date().toISOString() };
+        d.users[uid] = { uid: uid, loginId: id, name: name, pw: "hash:" + pw.length, approved: id === "admin" || !!d.autoApprove, isAdmin: id === "admin", created: new Date().toISOString() };
         d.users[uid].pwcheck = pw; put(d); localStorage.setItem("mq_mock_uid", uid); prof = pf(d.users[uid]); return prof;
       },
       async signIn(id, pw) {
@@ -304,6 +317,8 @@
         async listUsers() { return Object.values(db().users).map((u) => ({ uid: u.uid, loginId: u.loginId, name: u.name, approved: u.approved, isAdmin: u.isAdmin, created: u.created, withdrawn: u.withdrawn || null, purged: u.purged || null })); },
         async setApproved(uid, v) { const d = db(); if (d.users[uid].withdrawn) throw new Error("탈퇴한 계정"); d.users[uid].approved = v; put(d); },
         async purge(uid) { const d = db(); if (!d.users[uid].withdrawn) throw new Error("탈퇴하지 않은 계정"); delete d.files[uid]; d.users[uid].purged = new Date().toISOString(); d.users[uid].name = "(기록 삭제됨)"; put(d); },
+        async getAutoApprove() { return !!db().autoApprove; },
+        async setAutoApprove(v) { const d = db(); d.autoApprove = !!v; put(d); },
         async listPrintLogs() { return db().logs; }
       }
     };
@@ -434,7 +449,7 @@
 
   function signup() {
     const state = { p: lastProv() };
-    const box = show('<h2>계정 만들기</h2><p class="sub">가입한 뒤 관리자가 승인하면 문항을 볼 수 있습니다.</p>' + provSeg(state.p) +
+    const box = show('<h2>계정 만들기</h2><p class="sub">가입한 뒤 관리자 승인을 거쳐 문항을 볼 수 있습니다.</p>' + provSeg(state.p) +
       '<form class="au-f"><label>ID (영문 소문자·숫자 3~20자)<input name="id" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>' +
       '<label>이름<input name="name" autocomplete="name" required maxlength="30"></label>' +
       '<label>비밀번호 (8자 이상)<input name="pw" type="password" autocomplete="new-password" required></label>' +
@@ -468,15 +483,40 @@
     if (p && p.approved) { close(); location.reload(); return; }   // 승인된 계정: 내용 열쇠를 받아 다시 시작
     pending();
   }
+  // 승인 대기 중이면 10초마다(그리고 이 탭으로 돌아올 때마다) 승인 여부를 확인해, 승인되는 즉시 다시 불러와 내용을 연다
+  let watchTimer = null;
+  async function checkApproved() {
+    if (!cur) return false;
+    try {
+      const p2 = await get(cur).init();
+      if (p2 && p2.approved) { stopWatch(); close(); location.reload(); return true; }
+    } catch (e) { /* 네트워크 오류는 다음 확인 때 다시 */ }
+    return false;
+  }
+  function onVisible() { if (!document.hidden) checkApproved(); }
+  function watchApproval() {
+    if (watchTimer || !cur) return;
+    const p = me();
+    if (!p || p.approved) return;
+    watchTimer = setInterval(checkApproved, 10000);
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+  }
+  function stopWatch() {
+    if (watchTimer) clearInterval(watchTimer);
+    watchTimer = null;
+    document.removeEventListener("visibilitychange", onVisible);
+    window.removeEventListener("focus", onVisible);
+  }
   function pending() {
     const p = me();
-    const box = show("<h2>승인 대기 중</h2><p class=\"sub\">" + esc(p ? p.name : "") + " 님, 가입되었습니다. 관리자가 승인하면 문항을 볼 수 있습니다.</p>" +
-      '<div class="au-f"><div class="row"><button type="button" class="au-btn" data-a="check">승인 확인</button><button type="button" class="au-btn" data-a="acct">계정 관리</button></div><div class="au-msg"></div></div>');
+    const box = show("<h2>승인 대기 중</h2><p class=\"sub\">" + esc(p ? p.name : "") + " 님, 가입되었습니다. 관리자가 승인하면 <b>자동으로</b> 문항이 열립니다(이 창을 닫아도 됩니다).</p>" +
+      '<div class="au-f"><div class="row"><button type="button" class="au-btn" data-a="check">지금 확인</button><button type="button" class="au-btn" data-a="acct">계정 관리</button></div><div class="au-msg"></div></div>');
     box.querySelector("[data-a=acct]").onclick = account;
     box.querySelector("[data-a=check]").onclick = async function () {
-      const p2 = await get(cur).init();
-      if (p2 && p2.approved) { close(); location.reload(); } else box.querySelector(".au-msg").textContent = "아직 승인되지 않았습니다.";
+      if (!(await checkApproved())) box.querySelector(".au-msg").textContent = "아직 승인되지 않았습니다.";
     };
+    watchApproval();
   }
 
   function account() {
@@ -568,7 +608,7 @@
     enabled: function () { return !!CFG; },
     providers: providers,
     names: NAMES,
-    init: async function () { const p = await init(); headerButton(); return p; },
+    init: async function () { const p = await init(); headerButton(); if (p && !p.approved) watchApproval(); return p; },
     user: me,
     isAdmin: function () { const p = me(); return !!(p && p.isAdmin && p.approved); },
     contentKey: function () { return cur ? get(cur).contentKey() : Promise.resolve(null); },
@@ -583,6 +623,8 @@
       listUsers: (name) => get(name).admin.listUsers(),
       setApproved: (name, uid, v) => get(name).admin.setApproved(uid, v),
       purge: (name, uid) => get(name).admin.purge(uid),
+      getAutoApprove: (name) => get(name).admin.getAutoApprove(),
+      setAutoApprove: (name, v) => get(name).admin.setAutoApprove(v),
       listPrintLogs: (name) => get(name).admin.listPrintLogs()
     }
   };

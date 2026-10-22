@@ -826,8 +826,8 @@
       pickerHTML();
     if (locked) {
       const u = window.QuizAuth && window.QuizAuth.user();
-      html += '<div class="card resume"><div>' + (u ? "<b>승인 대기 중</b> — 관리자가 승인하면 문항을 볼 수 있습니다." : "사이트 이용을 위해 로그인해주시기 바랍니다.") + "</div>" +
-        '<div><button class="btn small primary" data-act="login">' + (u ? "승인 확인" : "로그인") + "</button></div></div>";
+      html += '<div class="card resume"><div>' + (u ? "<b>승인 대기 중</b> — 관리자가 승인하면 자동으로 문항이 열립니다." : "사이트 이용을 위해 로그인해주시기 바랍니다.") + "</div>" +
+        '<div><button class="btn small primary" data-act="login">' + (u ? "지금 확인" : "로그인") + "</button></div></div>";
     }
 
     if (!locked) sessionList().forEach(function (s) {
@@ -1177,6 +1177,10 @@
       }
       try {
         if (tab === "users") {
+          let auto = null;
+          try { auto = await QA.admin.getAutoApprove(p); } catch (e) { auto = null; }
+          out += '<div class="card settings adm-auto"><label><input type="checkbox" data-auto="' + p + '"' + (auto ? " checked" : "") + (auto === null ? " disabled" : "") + "> 새 가입자 자동 승인</label>" +
+            '<span class="hint">' + (auto === null ? "설정을 불러오지 못했습니다(서버 설정을 먼저 적용해야 합니다)." : auto ? "켜짐 — 가입하면 바로 문항을 볼 수 있습니다." : "꺼짐 — 가입한 사람은 관리자가 승인해야 문항을 볼 수 있습니다.") + "</span></div>";
           const us = await QA.admin.listUsers(p);
           // 승인 대기 → 승인됨 → 탈퇴 순
           const rank = function (u) { return u.withdrawn ? 2 : u.approved ? 1 : 0; };
@@ -1207,6 +1211,15 @@
         b.disabled = true;
         try { await QA.admin.setApproved(b.dataset.ap, b.dataset.uid, b.dataset.v === "1"); renderAdmin(tab); }
         catch (e) { alert("바꾸지 못했습니다: " + (e && e.message || e)); b.disabled = false; }
+      };
+    });
+    body.querySelectorAll("[data-auto]").forEach(function (c) {
+      c.onchange = async function () {
+        const v = c.checked;
+        if (v && !confirm("새 가입자 자동 승인을 켤까요? 켜면 누구나 가입만 하면 바로 모든 문항을 볼 수 있습니다.")) { c.checked = false; return; }
+        c.disabled = true;
+        try { await QA.admin.setAutoApprove(c.dataset.auto, v); renderAdmin(tab); }
+        catch (e) { alert("바꾸지 못했습니다: " + (e && e.message || e)); c.checked = !v; c.disabled = false; }
       };
     });
     body.querySelectorAll("[data-purge]").forEach(function (b) {
