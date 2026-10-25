@@ -1017,6 +1017,182 @@
     return new Blob(parts.concat(cd, [new Uint8Array(e.buffer)]), { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
   }
 
+  // ======================================================================
+  // PDF 바로 받기 (2026-10-25 사용자 지시: 인쇄 창을 거치지 않고, 미리 만든 PDF를 올려 두지도 않고, 누를 때 만든다)
+  // 미리보기 화면에 그려진 쪽을 그대로 읽어 벡터 PDF로 옮긴다: 글자 하나하나의 실제 위치, 배경·테두리 상자, 그림.
+  // 글꼴: 이 컴퓨터의 맑은 고딕(Chrome 로컬 글꼴 허용) → 없으면 나눔고딕을 받아 넣는다(글자마다 위치를 따로 잡으므로 배치는 같다).
+  // 라이브러리: vendor/pdf-lib.min.js, vendor/fontkit.umd.min.js (MIT, 처음 누를 때 불러온다)
+  // ======================================================================
+  const VENDOR = ["vendor/pdf-lib.min.js", "vendor/fontkit.umd.min.js"];
+  // 대체 글꼴은 TTF여야 한다(pdf-lib은 OTF(CFF) 글꼴을 줄여 넣으면 깨진다) → 나눔고딕(OFL), google/fonts 커밋 고정
+const NANUM = "https://cdn.jsdelivr.net/gh/google/fonts@e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/nanumgothic/NanumGothic-";
+  const SYM = "https://cdn.jsdelivr.net/npm/dejavu-fonts-ttf@2.37.3/ttf/";   // 기호용 보조 글꼴(DejaVu Sans, 자유 라이선스)
+  const MG_ASC = 2229, MG_DESC = 495;   // 맑은 고딕 hhea(단위 2048): 글자 칸 높이 중 기준선 위치
+  let libP = null, fontP = null;
+  function loadScript(src) {
+    return new Promise(function (res, rej) {
+      const s = document.createElement("script"); s.src = src;
+      s.onload = res; s.onerror = function () { rej(new Error(src + "를 불러오지 못했습니다")); };
+      document.head.appendChild(s);
+    });
+  }
+  function pdfLibs() {
+    if (!libP) libP = (async function () { for (const v of VENDOR) await loadScript(v); return { L: window.PDFLib, fk: window.fontkit }; })();
+    libP.catch(function () { libP = null; });
+    return libP;
+  }
+  // 버튼을 누른 바로 그때 불러야 한다(로컬 글꼴 허용 창은 사용자 클릭 직후에만 뜬다)
+  function pdfFonts() {
+    if (!fontP) fontP = (async function () {
+      try {
+        if (window.queryLocalFonts) {
+          const fs = await window.queryLocalFonts({ postscriptNames: ["MalgunGothic", "MalgunGothicBold"] });
+          const r = fs.find((f) => f.postscriptName === "MalgunGothic"), b = fs.find((f) => f.postscriptName === "MalgunGothicBold");
+          if (r && b) return { name: "맑은 고딕", r: await (await r.blob()).arrayBuffer(), b: await (await b.blob()).arrayBuffer() };
+        }
+      } catch (e) { /* 허용하지 않음 → 나눔고딕 */ }
+      const get = async function (w) {
+        const res = await fetch(NANUM + w + ".ttf");
+        if (!res.ok) throw new Error("글꼴을 받지 못했습니다(" + res.status + ")");
+        return res.arrayBuffer();
+      };
+      const both = await Promise.all([get("Regular"), get("Bold")]);
+      return { name: "나눔고딕", r: both[0], b: both[1] };
+    })();
+    fontP.catch(function () { fontP = null; });
+    return fontP;
+  }
+  function cssColor(L, s) {
+    const m = String(s).match(/rgba?\(([^)]+)\)/);
+    if (!m) return null;
+    const v = m[1].split(/[ ,/]+/).filter(Boolean).map(Number);
+    if (v.length > 3 && v[3] === 0) return null;
+    return L.rgb(v[0] / 255, v[1] / 255, v[2] / 255);
+  }
+  // pagesEl: 미리보기의 .qp-pages (지금 화면에 그려진 문서)
+  async function makePdf(pagesEl, fontsP, progress, title) {
+    const libs = await pdfLibs(), L = libs.L;
+    const F = await fontsP;
+    const pdf = await L.PDFDocument.create();
+    pdf.registerFontkit(libs.fk);
+    const fR = await pdf.embedFont(F.r, { subset: true }), fB = await pdf.embedFont(F.b, { subset: true });
+    const has = (f, cp) => { try { return f.embedder.font.hasGlyphForCodePoint(cp); } catch (e) { return false; } };
+    // 기본 글꼴에 없는 글자(그리스 문자·첨자·원 숫자 등)가 있으면 기호용 DejaVu Sans를 더 받는다. 그래도 없는 글자는 그림으로
+    let sR = null, sB = null;
+    const allText = pagesEl.textContent || "";
+    const needSym = Array.from(new Set(Array.from(allText))).some((c) => c.trim() && !has(fR, c.codePointAt(0)));
+    if (needSym) {
+      try {
+        const get = async (w) => { const r = await fetch(SYM + w + ".ttf"); if (!r.ok) throw new Error(String(r.status)); return r.arrayBuffer(); };
+        const sb = await Promise.all([get("DejaVuSans"), get("DejaVuSans-Bold")]);
+        sR = await pdf.embedFont(sb[0], { subset: true }); sB = await pdf.embedFont(sb[1], { subset: true });
+      } catch (e) { /* 못 받으면 없는 글자는 그림으로 */ }
+    }
+    const charImg = {};
+    async function glyphImage(ch, cs, wpx, hpx) {
+      const key = ch + "|" + cs.fontWeight + "|" + cs.fontStyle + "|" + cs.color + "|" + Math.round(wpx * 10) + "|" + Math.round(hpx * 10);
+      if (!charImg[key]) charImg[key] = (async function () {
+        const S = 6, cv = document.createElement("canvas");
+        cv.width = Math.max(1, Math.ceil(wpx * S)); cv.height = Math.max(1, Math.ceil(hpx * S));
+        const c = cv.getContext("2d");
+        c.font = cs.fontStyle + " " + cs.fontWeight + " " + (parseFloat(cs.fontSize) * S) + "px " + cs.fontFamily;
+        c.fillStyle = cs.color; c.textBaseline = "alphabetic";
+        c.fillText(ch, 0, hpx * S * MG_ASC / (MG_ASC + MG_DESC));
+        const blob = await new Promise((r) => cv.toBlob(r, "image/png"));
+        return pdf.embedPng(new Uint8Array(await blob.arrayBuffer()));
+      })();
+      return charImg[key];
+    }
+    const imgCache = {};
+    async function embedImg(src) {
+      if (!imgCache[src]) imgCache[src] = (async function () {
+        const buf = new Uint8Array(await (await fetch(src)).arrayBuffer());
+        return buf[0] === 0x89 && buf[1] === 0x50 ? pdf.embedPng(buf) : pdf.embedJpg(buf);
+      })();
+      return imgCache[src];
+    }
+    const pages = Array.from(pagesEl.querySelectorAll(".qp-pg"));
+    await Promise.all(Array.from(pagesEl.querySelectorAll("img")).map((im) => im.decode ? im.decode().catch(() => {}) : null));
+    const range = document.createRange();
+    for (let pi = 0; pi < pages.length; pi++) {
+      if (progress) progress(pi + 1, pages.length);
+      const pgEl = pages[pi], page = pdf.addPage([PAGE_W, PAGE_H]);
+      const pr = pgEl.getBoundingClientRect(), k = PAGE_W / pr.width;     // 화면 px → pt (미리보기 확대 비율과 무관)
+      const X = (x) => (x - pr.left) * k, Y = (y) => PAGE_H - (y - pr.top) * k;
+      // 1) 배경과 테두리, 그림 (문서 순서 = 바깥 상자부터)
+      for (const el of pgEl.querySelectorAll("*")) {
+        const cs = getComputedStyle(el);
+        if (cs.display === "none" || cs.visibility === "hidden") continue;
+        const r = el.getBoundingClientRect();
+        if (r.width <= 0 && r.height <= 0) continue;
+        if (el.tagName === "IMG") {
+          try { const im = await embedImg(el.currentSrc || el.src); page.drawImage(im, { x: X(r.left), y: Y(r.bottom), width: r.width * k, height: r.height * k }); } catch (e) { /* 그림 하나 실패는 건너뛴다 */ }
+          continue;
+        }
+        const bg = cssColor(L, cs.backgroundColor);
+        if (bg && !(bg.red === 1 && bg.green === 1 && bg.blue === 1)) page.drawRectangle({ x: X(r.left), y: Y(r.bottom), width: r.width * k, height: r.height * k, color: bg });
+        const side = function (w, st, c, x, y, ww, hh) {
+          const wpt = parseFloat(w) * 0.75;
+          if (!(wpt > 0) || st === "none" || st === "hidden") return;
+          const color = cssColor(L, c); if (!color) return;
+          page.drawRectangle({ x: x, y: y, width: ww === null ? wpt : ww, height: hh === null ? wpt : hh, color: color });
+        };
+        side(cs.borderTopWidth, cs.borderTopStyle, cs.borderTopColor, X(r.left), Y(r.top) - parseFloat(cs.borderTopWidth) * 0.75, r.width * k, null);
+        side(cs.borderBottomWidth, cs.borderBottomStyle, cs.borderBottomColor, X(r.left), Y(r.bottom), r.width * k, null);
+        side(cs.borderLeftWidth, cs.borderLeftStyle, cs.borderLeftColor, X(r.left), Y(r.bottom), null, r.height * k);
+        side(cs.borderRightWidth, cs.borderRightStyle, cs.borderRightColor, X(r.right) - parseFloat(cs.borderRightWidth) * 0.75, Y(r.bottom), null, r.height * k);
+      }
+      // 2) 글자: 화면에 놓인 자리 그대로. 같은 줄에서 글꼴의 글자 폭대로 이어지면 한 덩어리로 쓴다
+      const tw = document.createTreeWalker(pgEl, NodeFilter.SHOW_TEXT);
+      let node, gap = null;              // 낱말 사이 띄어쓰기는 따로 떨어진 글자 조각이다 → 다음 덩어리 앞에 붙여 복사·검색 때 띄어쓰기가 남게 한다
+      while ((node = tw.nextNode())) {
+        const t = node.nodeValue;
+        if (!t) continue;
+        if (!t.trim()) {
+          if (t.indexOf("\n") < 0) { range.selectNodeContents(node); const q = range.getClientRects()[0]; gap = q ? { x: X(q.left), base: Y(q.top + q.height * MG_ASC / (MG_ASC + MG_DESC)) } : null; }
+          continue;
+        }
+        const cs = getComputedStyle(node.parentElement);
+        if (cs.visibility === "hidden") continue;
+        const size = parseFloat(cs.fontSize) * 0.75, bold = parseInt(cs.fontWeight, 10) >= 600;
+        const main = bold ? fB : fR, sym = bold ? sB : sR;
+        const color = cssColor(L, cs.color) || L.rgb(0, 0, 0), ital = cs.fontStyle === "italic";
+        let run = "", rx = 0, ry = 0, nx = 0, rf = null;
+        const flush = function () {
+          if (run.trim()) page.drawText(run, { x: rx, y: ry, size: size, font: rf, color: color, xSkew: ital ? L.degrees(12) : undefined });
+          run = "";
+        };
+        for (let i = 0; i < t.length;) {
+          const cp = t.codePointAt(i), n = cp > 0xFFFF ? 2 : 1, ch = t.slice(i, i + n);
+          range.setStart(node, i); range.setEnd(node, i + n); i += n;
+          if (ch === "\n" || ch === "\t") { flush(); continue; }
+          const rs = range.getClientRects();
+          const rc = Array.from(rs).find((q) => q.width > 0) || rs[0];
+          if (!rc) { flush(); continue; }
+          const x = X(rc.left), base = Y(rc.top + rc.height * MG_ASC / (MG_ASC + MG_DESC));
+          const font = !ch.trim() || has(main, cp) ? main : sym && has(sym, cp) ? sym : null;
+          if (!font) {                                   // 어느 글꼴에도 없는 글자: 화면 모양을 그 자리에 그림으로
+            flush(); gap = null;
+            try { const im = await glyphImage(ch, cs, rc.width * k / 0.75, rc.height * k / 0.75); page.drawImage(im, { x: x, y: Y(rc.bottom), width: rc.width * k, height: rc.height * k }); } catch (e) { /* 건너뛴다 */ }
+            continue;
+          }
+          if (run && font === rf && Math.abs(base - ry) < 0.3 && Math.abs(x - nx) < 0.4) run += ch;
+          else {
+            flush(); run = ch; rx = x; ry = base; nx = x; rf = font;
+            if (gap && Math.abs(gap.base - base) < 0.5 && gap.x < x) { run = " " + ch; rx = x - font.widthOfTextAtSize(" ", size); }
+          }
+          gap = null;
+          let w; try { w = font.widthOfTextAtSize(ch, size); } catch (e) { w = rc.width * k; }
+          nx = x + w;
+        }
+        flush();
+      }
+      await new Promise((r) => setTimeout(r, 0));   // 화면이 멈추지 않게
+    }
+    if (title) pdf.setTitle(title);
+    return { bytes: await pdf.save(), font: F.name };
+  }
+
   function fileBase(doc) {
     const m = doc.meta;
     return m.name + " " + (doc.kind === "exam" ? "문제지" : "해설지") + (m.shuffle ? " (판 " + doc.code + ")" : "");
@@ -1094,7 +1270,8 @@
       '<span class="seg"><button type="button" data-k="exam">문제지</button><button type="button" data-k="key">해설지</button></span>' +
       '<label class="code">판 <input type="text" maxlength="4" spellcheck="false" autocomplete="off"></label>' +
       '<button type="button" class="b" data-a="new" title="선지를 새로 섞은 판">새 판</button>' +
-      '<button type="button" class="b pri" data-a="print">인쇄 · PDF</button>' +
+      '<button type="button" class="b pri" data-a="print">인쇄</button>' +
+      '<button type="button" class="b" data-a="pdf">PDF 받기</button>' +
       '<button type="button" class="b" data-a="docx">Word 파일</button>' +
       '<button type="button" class="b" data-a="close">닫기</button></div>' +
       '<div class="qp-msg"></div><div class="qp-view"><div class="qp-pages"></div></div>';
@@ -1105,6 +1282,7 @@
       else if (a && a.dataset.a === "new") { setCode(newCode()); render(); }
       else if (a && a.dataset.a === "print") doPrint();
       else if (a && a.dataset.a === "docx") doDocx();
+      else if (a && a.dataset.a === "pdf") doPdf();
       else if (a && a.dataset.a === "close") close();
     });
     const inp = root.querySelector(".code input");
@@ -1118,7 +1296,7 @@
   }
   function setCode(c) { state.code = c; saveCode(state.id, c); root.querySelector(".code input").value = c; }
   function msg(t) { root.querySelector(".qp-msg").textContent = t || ""; }
-  function busy(on) { root.querySelectorAll("[data-a=print],[data-a=docx]").forEach((b) => { b.disabled = on; }); }
+  function busy(on) { root.querySelectorAll("[data-a=print],[data-a=docx],[data-a=pdf]").forEach((b) => { b.disabled = on; }); }
   function fit() {
     if (!root || root.hidden) return;
     const pages = root.querySelector(".qp-pages");
@@ -1173,6 +1351,22 @@
       msg("Word 파일을 받았습니다: " + a.download);
       logPrint("docx");
     } catch (e) { msg("Word 파일을 만들지 못했습니다: " + (e && e.message || e)); }
+    busy(false);
+  }
+  async function doPdf() {
+    if (!state.doc) return;
+    const fontsP = pdfFonts();          // 클릭 바로 그때 시작해야 로컬 글꼴 허용 창이 뜬다
+    busy(true); msg("PDF를 만드는 중…");
+    try {
+      const out = await makePdf(root.querySelector(".qp-pages"), fontsP, function (i, n) { msg("PDF를 만드는 중… " + i + " / " + n + "쪽"); }, fileBase(state.doc));
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([out.bytes], { type: "application/pdf" }));
+      a.download = fileBase(state.doc) + ".pdf";
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+      msg("PDF를 받았습니다: " + a.download + (out.font === "맑은 고딕" ? "" : " (이 컴퓨터의 맑은 고딕을 쓸 수 없어 " + out.font + " 글꼴로 만들었습니다)"));
+      logPrint("pdf");
+    } catch (e) { msg("PDF를 만들지 못했습니다: " + (e && e.message || e)); }
     busy(false);
   }
   function close() { root.hidden = true; root.querySelector(".qp-pages").innerHTML = ""; document.body.style.overflow = ""; }
