@@ -533,7 +533,7 @@
       '<div class="au-msg"></div><div class="row"><button class="au-btn pri" type="submit">비밀번호 바꾸기</button></div></form>' +
       '<div class="au-sec au-f"><div class="row" style="justify-content:space-between"><button type="button" class="au-link" data-go="sec">비밀번호는 어떻게 보호되나요?</button><button type="button" class="au-btn" data-a="out">로그아웃</button></div></div>' +
       '<details class="au-sec au-wd"><summary>회원 탈퇴</summary>' +
-      '<p class="sub" style="margin:8px 0">탈퇴하면 이 계정으로 다시 로그인할 수 없고, <b>같은 ID로 다시 가입할 수도 없습니다</b>. 응시 기록은 지워지지 않고 서버에 남습니다(관리자가 지울 수 있습니다).</p>' +
+      '<p class="sub" style="margin:8px 0">탈퇴하면 이 계정으로 다시 로그인할 수 없고, <b>같은 ID로 다시 가입할 수도 없습니다</b>.</p>' +
       '<form class="au-f" data-f="wd"><label>비밀번호 확인<input name="pw" type="password" autocomplete="current-password" required></label>' +
       '<label style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" name="ok" required style="width:auto"> 위 내용을 확인했습니다.</label>' +
       '<div class="au-msg"></div><div class="row"><button class="au-btn au-danger" type="submit">탈퇴하기</button></div></form></details>');
