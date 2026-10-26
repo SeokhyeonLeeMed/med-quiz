@@ -36,6 +36,16 @@
     }
     return imgCache[p];
   };
+  // "기출+강의록" PDF(docs/<id>.bin, 그림과 같은 방식으로 암호화) → blob URL
+  const docCache = {};
+  window.QUIZ_DOC = function (id) {
+    if (!docCache[id]) {
+      docCache[id] = fetchBuf("docs/" + id + ".bin").then(function (u) { return decrypt(aesKey, u); })
+        .then(function (b) { return URL.createObjectURL(new Blob([b], { type: "application/pdf" })); });
+      docCache[id].catch(function () { delete docCache[id]; });
+    }
+    return docCache[id];
+  };
   // 새 배포가 있으면 다시 불러온다(브라우저가 예전 index.html을 최대 10분 캐시하므로)
   function myVersion() {
     const s = document.querySelector('script[src*="app.js?v="]');
@@ -92,6 +102,7 @@
       window.QUIZ_BANK = d.bank;
       window.QUIZ_CHANGES = d.changes || [];
       window.QUIZ_UPDATES = d.updates || [];   // 홈 화면 "최근 업데이트" 카드(data/updates.js)
+      window.QUIZ_DOCS = d.docs || [];         // "기출+강의록" PDF 목록(data/docs.js)
       window.QUIZ_USER = prof;
       window.QUIZ_STORE = window.QuizAuth.store();
       done();
@@ -101,6 +112,7 @@
       window.QUIZ_SUBJECTS = cat.subjects;
       window.QUIZ_GRADES = cat.grades;
       window.QUIZ_BANK = catalogBank(cat);
+      window.QUIZ_DOCS = cat.docs || [];       // 목록만(누르면 로그인 창)
       window.QUIZ_USER = prof || null;
       done();
       if (prof && !prof.approved) window.QuizAuth.pending();

@@ -804,6 +804,33 @@
       '<div class="ttl">' + esc(base) + "</div>" + rows + "</div>";
   }
 
+  // "기출+강의록"(data/docs.js): 강의록 기출 보완판 PDF — 받기만 한다(2026-10-26 사용자 지시).
+  // 게시본은 boot.js의 QUIZ_DOC(id)가 docs/<id>.bin을 풀어 blob URL을 준다. 로컬판은 src 파일을 바로 연다.
+  function docsOf(sid) { return (window.QUIZ_DOCS || []).filter(function (d) { return d.subjectId === sid; }); }
+  function docCard(d) {
+    return '<div class="card quiz-card doc">' +
+      '<div class="wk">' + esc(d.week + (d.prof ? " · " + d.prof : "")) + "</div>" +
+      '<div class="ttl">' + esc(d.title) + "</div>" +
+      '<div class="meta"><span>기출 ' + d.n + "문항</span><span>강의록 " + d.pages + "쪽</span></div>" +
+      '<div class="row"><div></div><button class="btn small primary" data-act="doc" data-id="' + esc(d.id) + '">PDF 받기</button></div>' +
+    "</div>";
+  }
+  function downloadDoc(id, btn) {
+    const d = (window.QUIZ_DOCS || []).filter(function (x) { return x.id === id; })[0];
+    if (!d) return;
+    const subj = SUBJ[d.subjectId] ? SUBJ[d.subjectId].name + " " : "";
+    const name = subj + d.week + " " + d.title.replace(/\s*:\s*/g, " - ").replace(/[\\/*?"<>|]/g, "·") + " (기출+강의록).pdf";
+    const label = btn.textContent;
+    btn.disabled = true; btn.textContent = "받는 중…";
+    const p = window.QUIZ_DOC ? window.QUIZ_DOC(d.id) : Promise.resolve(encodeURI(d.src));
+    p.then(function (url) {
+      const a = document.createElement("a");
+      a.href = url; a.download = name; a.rel = "noopener";
+      document.body.appendChild(a); a.click(); a.remove();
+    }, function (e) { alert("PDF를 받지 못했습니다: " + (e && e.message || e)); })
+      .then(function () { btn.disabled = false; btn.textContent = label; });
+  }
+
   // 기출 목록은 최신 시험부터: 연도 → 학기 → 기말·중간 → (같은 시험이면) 실제 시험, 대비 모음 순. 문제집(v2021)은 그 해로 친다.
   function examRank(qz) {
     const t = qz.title || "";
@@ -832,8 +859,8 @@
       return '<button type="button" data-grade="' + esc(g) + '" class="' + (g === settings.grade ? "on" : "") + '"' + (ok ? "" : " disabled title=\"아직 문항 없음\"") + ">" + esc(g) + "</button>";
     }).join("");
     const subjBtns = subjectsOfGrade(settings.grade).map(function (s) {
-      const nl = lectureQuizzes(s.id).length, ne = examQuizzes(s.id).length;
-      return '<button type="button" data-subject="' + s.id + '" class="' + (s.id === settings.subject ? "on" : "") + '"' + (nl + ne ? "" : " disabled") + ">" +
+      const nl = lectureQuizzes(s.id).length, ne = examQuizzes(s.id).length, nd = docsOf(s.id).length;
+      return '<button type="button" data-subject="' + s.id + '" class="' + (s.id === settings.subject ? "on" : "") + '"' + (nl + ne + nd ? "" : " disabled") + ">" +
         esc(s.name) + "</button>";
     }).join("");
     return '<div class="picker">' +
@@ -891,6 +918,11 @@
             groups.sort(function (a, b) { return examRank(b[0]) - examRank(a[0]); });   // 최신 기출부터(같은 순위는 원래 순서)
             return groups.map(function (g) { return g.length > 1 ? weekGroupCard(g, true) : quizCard(g[0], g[0].questions.length); }).join("");
           })() + "</div>";
+      }
+      const dq = docsOf(subj.id);
+      if (dq.length) {
+        html += '<h3 class="sec">기출+강의록 <span class="hint">강의록 여백에 그 슬라이드에서 나온 기출과 정답을 붙인 PDF</span></h3>' +
+          '<div class="quiz-grid">' + dq.map(docCard).join("") + "</div>";
       }
     }
 
@@ -1514,6 +1546,7 @@
     if (act === "admin") return renderAdmin(b.dataset.tab);
     if (act === "start") startQuiz(id, "full");
     else if (act === "print") { if (window.QuizPrint) window.QuizPrint.open(id); }
+    else if (act === "doc") downloadDoc(id, b);
     else if (act === "wrong") startQuiz(id, "wrong");
     else if (act === "next") go(1);
     else if (act === "prev") go(-1);
