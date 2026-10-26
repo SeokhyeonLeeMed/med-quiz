@@ -11,6 +11,9 @@
   "use strict";
   const A = () => window.QuizApp;
   const CIRC = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩"];
+  // "가~마 중 모두 고르시오" 문항(t "pick"): 선지 라벨이 가.~마.
+  const PICKLAB = ["가.", "나.", "다.", "라.", "마.", "바.", "사.", "아.", "자.", "차."];
+  const lab = (q, i) => (q && q.t === "pick" ? PICKLAB[i] : CIRC[i]);
   // 글꼴: Word 이름과 CSS 이름. (Noto Sans KR은 Windows에 가변 글꼴로 깔려 있어 Word가 글자 폭을 잘못 재므로 쓰지 않는다)
   const FONT = "맑은 고딕", CSS_FONT = '"Malgun Gothic","맑은 고딕"';
   // 고정 줄 간격에서 Word는 기준선을 줄 높이의 80% 자리에 둔다. 브라우저는 글자를 줄 가운데에 두므로
@@ -67,7 +70,7 @@
     return qz.questions.map(function (q, k) {
       const a = q.a || [];
       return { n: k + 1, lab: String(q.label || q.n).replace(/\s+/g, " "), qz: qz, q: q, exam: 1, order: (q.o || []).map((_, i) => i),
-        ansSet: a, ansText: q.t === "self" || !a.length ? "서술" : a.map((i) => CIRC[i]).join("") };
+        ansSet: a, ansText: q.t === "self" || !a.length ? "서술" : q.t === "pick" ? a.map((i) => PICKLAB[i].charAt(0)).join(",") : a.map((i) => CIRC[i]).join("") };
     });
   }
 
@@ -387,9 +390,9 @@
   // 선지: 짧은 선지(조합형 등)는 한 줄에 3개씩
   function optionParas(it, bf0) {
     const q = it.q, X = A(), out = [];
-    const opts = it.order.map((o, di) => [R(CIRC[di] + " ")].concat(runs(q.o[o])));
+    const opts = it.order.map((o, di) => [R(lab(q, di) + " ")].concat(runs(q.o[o])));
     const slot = [TW(1672) - TW(142), TW(3203) - TW(1672), COL_W - TW(3203)];
-    const three = X.isComboQ(q) || opts.every((rs) => textWidth(rs, 9.5) <= Math.min.apply(null, slot) - 4);
+    const three = q.t !== "pick" && (X.isComboQ(q) || opts.every((rs) => textWidth(rs, 9.5) <= Math.min.apply(null, slot) - 4));
     if (three && opts.length <= 6) {
       for (let r = 0; r < opts.length; r += 3) {
         let rs = [];
@@ -398,7 +401,7 @@
       }
     } else {
       it.order.forEach(function (o, di) {
-        out.push(P({ sz: 9.5, il: TW(425), hg: TW(283), bf: di === 0 ? bf0 : 0 }, [R(CIRC[di]), TAB].concat(runs(q.o[o]))));
+        out.push(P({ sz: 9.5, il: TW(425), hg: TW(283), bf: di === 0 ? bf0 : 0 }, [R(lab(q, di)), TAB].concat(runs(q.o[o]))));
       });
     }
     return out;
@@ -579,7 +582,7 @@
     }
     (q.o || []).forEach(function (o, i) {
       const st = set.indexOf(i) >= 0 && q.t !== "self" ? { b: 1, c: RED } : { c: GRAY };
-      u1.push(P({ sz: 8.5, il: TW(425), hg: TW(255) }, [R(CIRC[i], st), TAB].concat(runs(o, st))));
+      u1.push(P({ sz: 8.5, il: TW(425), hg: TW(255) }, [R(lab(q, i), st), TAB].concat(runs(o, st))));
     });
     (q.notes || []).forEach((n) => u1.push(P({ sz: 8, bf: 2, il: TW(170) }, [R("※ " + n, { c: GRAY })])));
     units.push(u1);

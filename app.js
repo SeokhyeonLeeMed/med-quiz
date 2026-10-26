@@ -58,6 +58,9 @@
     IDBK.hist += sfx; IDBK.sessions += sfx;
   }
   const CIRCLED = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩"];
+  // "가~마 중 옳은 것을 모두 고르시오"(번호 선지 없음) 문항: t "pick" — 제시문을 여러 개 골라 제출, 고른 묶음이 정답과 같아야 정답
+  const PICKLAB = ["가", "나", "다", "라", "마", "바", "사", "아", "자", "차"];
+  function optLab(q, di) { return q && q.t === "pick" ? PICKLAB[di] : CIRCLED[di]; }
 
   // ---------- storage ----------
   function load(k, def) {
@@ -479,7 +482,7 @@
     const r = qv(key, session);
     const orig = session.orders[key][displayIdx];
     const t = qType(r.q);
-    if (t === "multi") {
+    if (t === "multi" || t === "pick") {
       session.sel = session.sel || {};
       const cur = session.sel[key] || [];
       const i = cur.indexOf(orig);
@@ -801,6 +804,28 @@
       '<div class="ttl">' + esc(base) + "</div>" + rows + "</div>";
   }
 
+  // 기출 목록은 최신 시험부터: 연도 → 학기 → 기말·중간 → (같은 시험이면) 실제 시험, 대비 모음 순. 문제집(v2021)은 그 해로 친다.
+  function examRank(qz) {
+    const t = qz.title || "";
+    let m = t.match(/^(\d{4})학년도\s*(\d)학기\s*(중간|기말)?/);
+    if (m) return +m[1] * 1000 + +m[2] * 100 + (m[3] === "기말" ? 20 : m[3] === "중간" ? 10 : 0) + (/대비/.test(t) ? 0 : 5);
+    m = t.match(/\(v(\d{4})\)/) || t.match(/(\d{4})/);
+    return m ? +m[1] * 1000 : 0;
+  }
+
+  // 최근 사이트 업데이트(data/updates.js, 배포 때 d.bin에 함께 들어간다) — 홈 화면 카드
+  function updatesHTML() {
+    const ups = (window.QUIZ_UPDATES || []).slice(0, 6);
+    if (!ups.length) return "";
+    const day = function (s) { const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? +m[2] + "월 " + +m[3] + "일" : String(s); };
+    const one = function (u) {
+      return '<div class="upd-day"><span class="upd-date">' + esc(day(u.d)) + "</span><ul>" +
+        u.items.map(function (i) { return "<li>" + esc(i) + "</li>"; }).join("") + "</ul></div>";
+    };
+    return '<div class="card updates"><div class="upd-head">최근 업데이트</div>' + one(ups[0]) +
+      (ups.length > 1 ? "<details><summary>이전 업데이트</summary>" + ups.slice(1).map(one).join("") + "</details>" : "") + "</div>";
+  }
+
   function pickerHTML() {
     const gradeBtns = GRADES.map(function (g) {
       const ok = subjectsOfGrade(g).some(function (s) { return hasData(s.id); });
@@ -823,7 +848,7 @@
     const subj = SUBJ[settings.subject];
     const locked = !!window.QUIZ_LOCKED;
     let html = "<h1>과목 선택</h1>" +
-      pickerHTML();
+      pickerHTML() + updatesHTML();
     if (locked) {
       const u = window.QuizAuth && window.QuizAuth.user();
       html += '<div class="card resume"><div>' + (u ? "<b>승인 대기 중</b> — 관리자가 승인하면 자동으로 문항이 열립니다." : "사이트 이용을 위해 로그인해주시기 바랍니다.") + "</div>" +
@@ -863,6 +888,7 @@
           '<div class="quiz-grid">' + (function () {
             const groups = [], byBase = {};
             eq.forEach(function (qz) { const k = qz.base || qz.id; if (!byBase[k]) { byBase[k] = []; groups.push(byBase[k]); } byBase[k].push(qz); });
+            groups.sort(function (a, b) { return examRank(b[0]) - examRank(a[0]); });   // 최신 기출부터(같은 순위는 원래 순서)
             return groups.map(function (g) { return g.length > 1 ? weekGroupCard(g, true) : quizCard(g[0], g[0].questions.length); }).join("");
           })() + "</div>";
       }
@@ -920,6 +946,7 @@
           (q.pf ? ' <span class="badge pf">출제 ' + esc(q.pf) + " 교수님</span>" : "") +
           (q.alt ? ' <span class="badge alt">Claude 보완</span>' : "") +
           (t === "multi" ? ' <span class="badge">' + answerSet(q).length + "개 고르기</span>" : "") +
+          (t === "pick" ? ' <span class="badge">모두 고르기</span>' : "") +
           (t === "self" ? ' <span class="badge">스스로 채점</span>' : "") + "</div>" : "");
 
     if (exam) html += examStemHTML(r, esc(String(r.q.label || r.q.n)));   // 기출은 시험 문항 번호(복기 안 된 번호는 건너뛴다)
@@ -939,12 +966,12 @@
           if (set.indexOf(orig) >= 0) { cls += " correct"; tag = "정답"; }
           else if (chosenArr.indexOf(orig) >= 0) { cls += " wrong"; tag = "내 선택"; }
           else cls += " dim";
-        } else if (t === "multi" && sel.indexOf(orig) >= 0) {
+        } else if ((t === "multi" || t === "pick") && sel.indexOf(orig) >= 0) {
           cls += " sel"; tag = "선택";
         }
         const disabled = answered || t === "self";
         return '<button type="button" class="' + cls + '" data-opt="' + di + '"' + (disabled ? " disabled" : "") + ">" +
-          '<span class="num">' + (di + 1) + '</span><span class="otext">' + fmt(q.o[orig]) + "</span>" +
+          '<span class="num">' + (t === "pick" ? PICKLAB[di] : di + 1) + '</span><span class="otext">' + fmt(q.o[orig]) + "</span>" +
           (tag ? '<span class="tag">' + tag + "</span>" : "") + "</button>";
       }).join("") + "</div>";
     }
@@ -952,6 +979,10 @@
     if (t === "multi" && !answered) {
       html += '<div class="actions"><button class="btn primary" data-act="submit"' + (sel.length ? "" : " disabled") + ">" +
         "제출 (" + sel.length + "/" + answerSet(q).length + "개 선택)</button></div>";
+    }
+    if (t === "pick" && !answered) {   // 정답 개수는 보이지 않는다
+      html += '<div class="actions"><button class="btn primary" data-act="submit"' + (sel.length ? "" : " disabled") + ">" +
+        "제출 (" + sel.length + "개 선택)</button></div>";
     }
     if (t === "self" && !revealed) {
       html += '<div class="actions"><button class="btn primary" data-act="reveal">답을 생각한 뒤 해설 보기</button></div>';
@@ -968,9 +999,9 @@
 
     if (answered && t !== "self") {
       const ok = isRight(q, chosen);
-      const right = answerSet(q).map(function (o) { return CIRCLED[order.indexOf(o)]; }).join(", ");
+      const right = answerSet(q).slice().sort(function (a, b) { return order.indexOf(a) - order.indexOf(b); }).map(function (o) { return optLab(q, order.indexOf(o)); }).join(", ");
       html += '<div class="verdict ' + (ok ? "ok" : "bad") + '" id="verdict">' +
-        (ok ? "정답입니다." : "오답입니다. 정답은 " + right + "번입니다.") + "</div>" +
+        (ok ? "정답입니다." : "오답입니다. 정답은 " + right + (t === "pick" ? "입니다." : "번입니다.")) + "</div>" +
         '<div class="explain">' + explanationHTML(key, order, chosen, r) + "</div>";
     }
     if (revealed) {
@@ -1011,7 +1042,7 @@
     if (ch === "ok") return "스스로 채점: 맞힘";
     if (ch === "bad") return "스스로 채점: 틀림";
     const arr = Array.isArray(ch) ? ch : [ch];
-    return arr.map(function (o) { return CIRCLED[order.indexOf(o)] + " " + fmt(r.q.o[o] || ""); }).join(", ");
+    return arr.map(function (o) { return optLab(r.q, order.indexOf(o)) + " " + fmt(r.q.o[o] || ""); }).join(", ");
   }
 
   function reviewList(att) {
@@ -1546,7 +1577,7 @@
     if (/^[1-9]$/.test(e.key) && !answered && t !== "self") {
       const n = +e.key - 1;
       if (n < session.orders[key].length) { e.preventDefault(); choose(n); }
-    } else if (e.key === "Enter" && !answered && t === "multi") {
+    } else if (e.key === "Enter" && !answered && (t === "multi" || t === "pick")) {
       e.preventDefault(); submitMulti();
     } else if (e.key === "Enter" && !answered && t === "self" && !(session.reveal && session.reveal[key])) {
       e.preventDefault(); revealSelf();

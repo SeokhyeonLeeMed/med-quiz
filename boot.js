@@ -91,6 +91,7 @@
       window.QUIZ_GRADES = d.grades;
       window.QUIZ_BANK = d.bank;
       window.QUIZ_CHANGES = d.changes || [];
+      window.QUIZ_UPDATES = d.updates || [];   // 홈 화면 "최근 업데이트" 카드(data/updates.js)
       window.QUIZ_USER = prof;
       window.QUIZ_STORE = window.QuizAuth.store();
       done();
