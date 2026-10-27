@@ -344,7 +344,8 @@
     return v ? { quiz: r.quiz, q: Object.assign({}, r.q, { q: v.q, o: v.o, a: v.a, sx: v.sx }), idx: r.idx } : r;
   }
   function orderFor(r, k, n) {
-    return isExam(r.quiz) || isComboQ(r.q) ? range(n) : (settings.shuffleOpts ? shuffle(range(n)) : fixedOrder(k, n));
+    // 가~마 고르기형(pick)과 "가, 나, 다"처럼 순서가 정해진 보기 조합(keep)도 순서를 지킨다
+    return isExam(r.quiz) || isComboQ(r.q) || qType(r.q) === "pick" || r.q.keep ? range(n) : (settings.shuffleOpts ? shuffle(range(n)) : fixedOrder(k, n));
   }
   function fpOf(key) {
     const r = qByKey(key);
@@ -559,6 +560,21 @@
     let html = "";
     if (q.c) html += '<div class="concept"><b>기본 개념</b>' + fmt(q.c) + "</div>";
     if (q.sx) return html + comboExplanationHTML(r, order, chosenOrig);
+    // 단답형(t "self"): 모범 답안(h)과 해설 항목(e)만 있다. 선지가 없으므로 e를 차례로 보인다
+    if (qType(q) === "self") {
+      html = '<div class="exam-ans"><b>모범 답안</b> ' + fmt(q.h || "") + "</div>" + html + '<div class="ex-list">';
+      (q.e || []).forEach(function (ex) {
+        const ref = refInfo(r.quiz, ex[1]);
+        html += '<div class="ex' + (r.quiz.noImg ? " noimg" : "") + ' is-correct"><div><div class="ex-item is-correct">' +
+          '<div class="ex-why">' + fmt(ex[0]) + "</div>" +
+          '<blockquote class="ex-quote"><span class="src">강의노트 ' + esc(ref.long) + "</span>" + fmt(ex[2]) + "</blockquote></div></div>" +
+          (r.quiz.noImg ? "" : thumbHTML(ref, ref.long + " — " + ex[2])) + "</div>";
+      });
+      return html + "</div>";
+    }
+    // 정답이 여럿일 수 있다(고르기형 pick: a가 배열, 고른 것도 배열)
+    const ansSet = answerSet(q);
+    const chosenSet = Array.isArray(chosenOrig) ? chosenOrig : (typeof chosenOrig === "number" ? [chosenOrig] : []);
     // 근거 슬라이드가 같은 선지는 한 칸으로 묶고 사진은 하나만 보여 준다.
     // 슬라이드 사진이 없는 과목(noImg)은 선지마다 따로 두고 원문 인용만 보여 준다
     const noImg = !!r.quiz.noImg;
@@ -571,23 +587,23 @@
     });
     html += '<div class="ex-list">';
     groups.forEach(function (g) {
-      const hasCorrect = g.items.some(function (it) { return it.orig === q.a; });
-      const hasChosenWrong = g.items.some(function (it) { return it.orig === chosenOrig && it.orig !== q.a; });
+      const hasCorrect = g.items.some(function (it) { return ansSet.indexOf(it.orig) >= 0; });
+      const hasChosenWrong = g.items.some(function (it) { return chosenSet.indexOf(it.orig) >= 0 && ansSet.indexOf(it.orig) < 0; });
       let body = "";
       const quotes = [];
       const many = g.items.length > 1;
       // 각 선지의 근거(강의노트 원문)는 그 선지 해설 바로 아래에 둔다
       g.items.forEach(function (it) {
         const ex = q.e[it.orig];
-        const isCorrect = it.orig === q.a;
-        const isChosen = it.orig === chosenOrig;
+        const isCorrect = ansSet.indexOf(it.orig) >= 0;
+        const isChosen = chosenSet.indexOf(it.orig) >= 0;
         let pills = isCorrect ? '<span class="pill ok">정답</span>' : '<span class="pill bad">오답</span>';
         if (isChosen) pills += '<span class="pill mine">내 선택</span>';
         body += '<div class="ex-item' + (isCorrect ? " is-correct" : (isChosen ? " is-chosen-wrong" : "")) + '">' +
-          '<div class="ex-head">' + CIRCLED[it.di] + " " + pills + "</div>" +
+          '<div class="ex-head">' + optLab(q, it.di) + " " + pills + "</div>" +
           '<div class="ex-opt">' + fmt(q.o[it.orig]) + "</div>" +
           '<div class="ex-why">' + fmt(ex[0]) + "</div>" +
-          '<blockquote class="ex-quote"><span class="src">강의노트 ' + esc(g.ref.long) + (many ? " · " + CIRCLED[it.di] + " 근거" : "") + "</span>" +
+          '<blockquote class="ex-quote"><span class="src">강의노트 ' + esc(g.ref.long) + (many ? " · " + optLab(q, it.di) + " 근거" : "") + "</span>" +
             fmt(ex[2]) + "</blockquote></div>";
         if (quotes.indexOf(ex[2]) < 0) quotes.push(ex[2]);
       });
@@ -786,7 +802,7 @@
       const last = lastAttempt(meta.id);
       const best = fa.reduce(function (m, a) { return Math.max(m, pct(a)); }, 0);
       const wrongN = last ? last.items.filter(function (i) { return !i.correct; }).length : 0;
-      const m = meta.title.match(/(\d+회)$/);
+      const m = meta.title.match(/(\d+회)$/) || meta.title.match(/\((CBT 반영)\)$/);   // "… (CBT 반영)" 세트(2026-10-27)
       return '<div class="round">' +
         '<div class="round-info"><b>' + esc(exam ? meta.ver || meta.title : m ? m[1] : meta.title) + "</b>" +
           '<span class="meta"><span>' + meta.questions.length + "문항</span>" +
@@ -901,12 +917,18 @@
     if (subj) {
       const lq = lectureQuizzes(subj.id), eq = examQuizzes(subj.id);
       html += "<h2>" + esc(subj.name) + ' <span class="badge">' + esc(subj.grade + " " + subj.term) + "</span></h2>";
+      const dq = docsOf(subj.id);   // 기출+강의록은 과목 화면 맨 위(2026-10-27 사용자 지시)
+      if (dq.length) {
+        html += '<h3 class="sec" style="margin-top:0">기출+강의록 <span class="hint">강의록 여백에 그 슬라이드에서 나온 기출과 정답을 붙인 PDF</span></h3>' +
+          '<div class="quiz-grid">' + dq.map(docCard).join("") + "</div>";
+      }
       if (lq.length) {
         const groups = [], byWeek = {};
         lq.forEach(function (qz) {
           if (!byWeek[qz.week]) { byWeek[qz.week] = []; groups.push(byWeek[qz.week]); }
           byWeek[qz.week].push(qz);
         });
+        if (dq.length) html += '<h3 class="sec">연습 문제 <span class="hint">강의 주차별 문항</span></h3>';
         html += '<div class="quiz-grid">' + groups.map(function (g) { return g.length > 1 ? weekGroupCard(g) : quizCard(g[0], g[0].questions.length); }).join("") +
           quizCard(quizMeta("MIX:" + subj.id), 20) + "</div>";
       }
@@ -918,11 +940,6 @@
             groups.sort(function (a, b) { return examRank(b[0]) - examRank(a[0]); });   // 최신 기출부터(같은 순위는 원래 순서)
             return groups.map(function (g) { return g.length > 1 ? weekGroupCard(g, true) : quizCard(g[0], g[0].questions.length); }).join("");
           })() + "</div>";
-      }
-      const dq = docsOf(subj.id);
-      if (dq.length) {
-        html += '<h3 class="sec">기출+강의록 <span class="hint">강의록 여백에 그 슬라이드에서 나온 기출과 정답을 붙인 PDF</span></h3>' +
-          '<div class="quiz-grid">' + dq.map(docCard).join("") + "</div>";
       }
     }
 
@@ -1085,7 +1102,7 @@
       const stale = !it.variant && !!(r.q.rev && r.q.rev > att.ts);
       const order = stale ? range(r.q.o.length) : (it.order || range(r.q.o.length));
       const exam = isExam(r.quiz);
-      const rightTxt = exam ? fmt(r.q.h) : answerText(r, order, r.q.a);
+      const rightTxt = exam || qType(r.q) === "self" ? fmt(r.q.h || "") : answerText(r, order, r.q.a);
       return '<details class="card review-item"' + (it.correct ? "" : " open") + ">" +
         '<summary><span class="mark ' + (it.correct ? "ok" : "bad") + '">' + (it.correct ? "○" : "✕") + "</span>" +
           '<div><div class="rq">' + (i + 1) + ". " + fmt(stemOf(String(r.q.q).replace("[공통 지문] ", ""))) + "</div>" +

@@ -58,9 +58,13 @@
         const v = S.shuffleOpts && q0.sx ? X.makeVariant(q0, rnd) : null;
         if (v) q = Object.assign({}, q0, v);
         order = X.range(q.o.length);
+      } else if (q0.t === "pick" || q0.t === "self" || q0.keep) {
+        order = X.range(q0.o.length);   // 가~마 고르기형·단답형·순서 고정 보기는 섞지 않는다
       } else {
         order = S.shuffleOpts ? X.shuffle(X.range(q0.o.length), rnd) : X.fixedOrder(qz.id + "#" + i, q0.o.length);
       }
+      if (q0.t === "pick") return { n: k + 1, lab: String(k + 1), qz: qz, q: q, order: order, ans: -1, ansSet: q.a, ansText: q.a.map((x) => PICKLAB[x].charAt(0)).join(",") };
+      if (q0.t === "self") return { n: k + 1, lab: String(k + 1), qz: qz, q: q, order: order, ans: -1, ansSet: [], ansText: "서술" };
       const ans = order.indexOf(q.a);
       return { n: k + 1, lab: String(k + 1), qz: qz, q: q, order: order, ans: ans, ansText: CIRC[ans] };
     });
@@ -621,7 +625,9 @@
       const lines = String(q.q).split("\n");
       const stem = lines[0], bogi = lines.slice(1).filter((l) => l.trim());
       // 1) 문항 머리 + 문항 다시 보기
-      const head = [R(it.lab + "번", { b: 1, c: BLUE, sz: 12 }), R("     정답 " + CIRC[it.ans], { b: 1, c: RED, sz: 11 })];
+      // 고르기형(pick)은 정답이 여럿(가,다,마), 단답형(self)은 모범 답안(h)
+      const tp = q.t || "mc", isAns = (di) => (tp === "pick" ? it.ansSet.indexOf(it.order[di]) >= 0 : di === it.ans);
+      const head = [R(it.lab + "번", { b: 1, c: BLUE, sz: 12 }), R("     정답 " + (tp === "self" ? q.h : tp === "pick" ? it.ansText : CIRC[it.ans]), { b: 1, c: RED, sz: 11 })];
       if (combo) head.push(R("  (" + q.o[q.a] + ")", { b: 1, c: RED, sz: 10 }));
       if (m.type === "mix") head.push(R("     " + qz.week + " " + qz.title, { c: GRAY, sz: 9 }));   // 랜덤: 어느 회차 문항인지
       const u1 = [P({ sz: 12, bf: 14, af: 2, bdr: { sz: 0.75, c: BLUE, sp: 1 } }, head)];
@@ -632,8 +638,8 @@
           : P({ sz: 8.5, il: TW(170) }, runs(b.text, { c: GRAY })));
       });
       const optRuns = it.order.map(function (o, di) {
-        const st = di === it.ans ? { b: 1, c: RED } : { c: GRAY };
-        return [R(CIRC[di] + " " + q.o[o], st)];
+        const st = isAns(di) ? { b: 1, c: RED } : { c: GRAY };
+        return [R(lab(q, di) + " " + q.o[o], st)];
       });
       const stops = [TW(1191), TW(2211), TW(3231), TW(4252)];
       const oneLine = X.isComboQ(q) && optRuns.length <= 5 && optRuns.every((rs) => textWidth(rs, 8.5) <= TW(1020) - 3);
@@ -643,8 +649,8 @@
         u1.push(P({ sz: 8.5, il: TW(170), tabs: stops, bf: 1 }, rs));
       } else {
         it.order.forEach(function (o, di) {
-          const st = di === it.ans ? { b: 1, c: RED } : { c: GRAY };
-          u1.push(P({ sz: 8.5, il: TW(425), hg: TW(255) }, [R(CIRC[di], st), TAB].concat(runs(q.o[o], st))));
+          const st = isAns(di) ? { b: 1, c: RED } : { c: GRAY };
+          u1.push(P({ sz: 8.5, il: TW(425), hg: TW(255) }, [R(lab(q, di), st), TAB].concat(runs(q.o[o], st))));
         });
       }
       units.push(u1);
@@ -657,7 +663,7 @@
         ]);
       }
       // 3) 선지(보기) 해설: 근거 슬라이드가 같은 것끼리 묶고, 묶음마다 슬라이드 사진 하나
-      const heading = P({ sz: 10, bf: 2, af: 2 }, [R(combo ? "■ 보기 해설" : "■ 선지 해설", { b: 1, c: BLUE })]);
+      const heading = P({ sz: 10, bf: 2, af: 2 }, [R(combo ? "■ 보기 해설" : tp === "self" ? "■ 해설" : tp === "pick" ? "■ 제시문 해설" : "■ 선지 해설", { b: 1, c: BLUE })]);
       const groups = [], byKey = {};
       if (combo) {
         q.sx.forEach(function (s, i) {
@@ -667,12 +673,15 @@
           byKey[gk].items.push({ lab: s[0], ok: !!s[1], ex: s[2], quote: s[4], correct: false });
         });
       } else {
-        it.order.forEach(function (o, di) {
-          const e = q.e[o];
+        // 단답형은 선지가 없으므로 해설 항목(e)을 차례로 보인다
+        const rows = tp === "self" ? q.e.map((e, k) => ({ o: k, di: -1, e: e })) : it.order.map((o, di) => ({ o: o, di: di, e: q.e[o] }));
+        rows.forEach(function (row) {
+          const o = row.o, di = row.di, e = row.e;
           const ref = X.refInfo(qz, e[1]);
           const gk = noImg ? "o" + o : ref.src;
           if (!byKey[gk]) { byKey[gk] = { ref: ref, page: e[1], items: [] }; groups.push(byKey[gk]); }
-          byKey[gk].items.push({ lab: CIRC[di], ok: o === q.a, ex: String(e[0]).replace(/^정답[.:]?\s*/, ""), quote: e[2], correct: o === q.a });
+          const ok = tp === "self" ? true : tp === "pick" ? it.ansSet.indexOf(o) >= 0 : o === q.a;
+          byKey[gk].items.push({ lab: di < 0 ? "" : lab(q, di), self: di < 0, ok: ok, ex: String(e[0]).replace(/^정답[.:]?\s*/, ""), quote: e[2], correct: ok });
         });
         // 정답이 든 묶음을 먼저
         groups.sort((a, b) => (b.items.some((x) => x.correct) ? 1 : 0) - (a.items.some((x) => x.correct) ? 1 : 0));
@@ -685,7 +694,7 @@
         g.items.forEach(function (x, xi) {
           const lab = combo ? R(x.lab, { b: 1 }) : R(x.lab, x.correct ? { b: 1, c: RED } : { b: 1 });
           const verdict = combo ? (x.ok ? R("옳음   ", { b: 1, c: GREEN }) : R("틀림   ", { b: 1, c: RED }))
-            : (x.correct ? R("정답   ", { b: 1, c: GREEN }) : R("오답   ", { b: 1, c: RED }));
+            : x.self ? R("") : (x.correct ? R("정답   ", { b: 1, c: GREEN }) : R("오답   ", { b: 1, c: RED }));
           const u = [];
           if (firstUnit) { u.push(heading); firstUnit = false; }
           u.push(P({ sz: 9.5, il: TW(397), hg: TW(283), af: 1 }, [lab, TAB, verdict].concat(runs(x.ex))));
