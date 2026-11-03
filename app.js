@@ -802,7 +802,7 @@
       const last = lastAttempt(meta.id);
       const best = fa.reduce(function (m, a) { return Math.max(m, pct(a)); }, 0);
       const wrongN = last ? last.items.filter(function (i) { return !i.correct; }).length : 0;
-      const m = meta.title.match(/(\d+회)$/) || meta.title.match(/\((CBT 반영)\)$/);   // "… (CBT 반영)" 세트(2026-10-27)
+      const m = meta.title.match(/(\d+회)$/) || meta.title.match(/\((CBT 반영(?: \d+회)?)\)$/);   // "… (CBT 반영)"·"… (CBT 반영 2회)" 세트(2026-10-27, 회차 2026-11-03)
       return '<div class="round">' +
         '<div class="round-info"><b>' + esc(exam ? meta.ver || meta.title : m ? m[1] : meta.title) + "</b>" +
           '<span class="meta"><span>' + meta.questions.length + "문항</span>" +
