@@ -853,14 +853,26 @@
       '<div class="ttl">' + esc(base) + "</div>" + rows + "</div>";
   }
 
-  // "기출+강의록"(data/docs.js): 강의록 기출 보완판 PDF — 받기만 한다(2026-10-26 사용자 지시).
+  // 과목 화면에서 받는 PDF(data/docs.js) — 받기만 한다(2026-10-26 사용자 지시).
+  // 종류(kind): "lecsupp" 기출+강의록(기본) / "guide" 강의록 해설(2026-11-11).
   // 게시본은 boot.js의 QUIZ_DOC(id)가 docs/<id>.bin을 풀어 blob URL을 준다. 로컬판은 src 파일을 바로 연다.
-  function docsOf(sid) { return (window.QUIZ_DOCS || []).filter(function (d) { return d.subjectId === sid; }); }
+  const DOCKIND = {
+    lecsupp: { sec: "기출+강의록", hint: "강의록 여백에 그 슬라이드에서 나온 기출과 정답을 붙인 PDF", suffix: "기출+강의록",
+      meta: function (d) { return "<span>기출 " + d.n + "문항</span><span>강의록 " + d.pages + "쪽</span>"; } },
+    guide: { sec: "강의록 해설", hint: "슬라이드마다 그림과 해설을 단 PDF", suffix: "슬라이드 해설",
+      meta: function (d) { return "<span>슬라이드 " + d.slides + "장</span><span>해설 " + d.pages + "쪽</span>"; } }
+  };
+  function docKind(d) { return DOCKIND[d.kind] || DOCKIND.lecsupp; }
+  function docsOf(sid, kind) {
+    return (window.QUIZ_DOCS || []).filter(function (d) {
+      return d.subjectId === sid && (!kind || (d.kind || "lecsupp") === kind);
+    });
+  }
   function docCard(d) {
     return '<div class="card quiz-card doc">' +
       '<div class="wk">' + esc(d.week + (d.prof ? " · " + d.prof : "")) + "</div>" +
       '<div class="ttl">' + esc(d.title) + "</div>" +
-      '<div class="meta"><span>기출 ' + d.n + "문항</span><span>강의록 " + d.pages + "쪽</span></div>" +
+      '<div class="meta">' + docKind(d).meta(d) + "</div>" +
       '<div class="row"><div></div><button class="btn small primary" data-act="doc" data-id="' + esc(d.id) + '">PDF 받기</button></div>' +
     "</div>";
   }
@@ -868,7 +880,7 @@
     const d = (window.QUIZ_DOCS || []).filter(function (x) { return x.id === id; })[0];
     if (!d) return;
     const subj = SUBJ[d.subjectId] ? SUBJ[d.subjectId].name + " " : "";
-    const name = subj + d.week + " " + d.title.replace(/\s*:\s*/g, " - ").replace(/[\\/*?"<>|]/g, "·") + " (기출+강의록).pdf";
+    const name = subj + d.week + " " + d.title.replace(/\s*:\s*/g, " - ").replace(/[\\/*?"<>|]/g, "·") + " (" + docKind(d).suffix + ").pdf";
     const label = btn.textContent;
     btn.disabled = true; btn.textContent = "받는 중…";
     const p = window.QUIZ_DOC ? window.QUIZ_DOC(d.id) : Promise.resolve(encodeURI(d.src));
@@ -950,18 +962,23 @@
     if (subj) {
       const lq = lectureQuizzes(subj.id), eq = examQuizzes(subj.id);
       html += "<h2>" + esc(subj.name) + ' <span class="badge">' + esc(subj.grade + " " + subj.term) + "</span></h2>";
-      const dq = docsOf(subj.id);   // 기출+강의록은 과목 화면 맨 위(2026-10-27 사용자 지시)
-      if (dq.length) {
-        html += '<h3 class="sec" style="margin-top:0">기출+강의록 <span class="hint">강의록 여백에 그 슬라이드에서 나온 기출과 정답을 붙인 PDF</span></h3>' +
+      // 받는 PDF는 과목 화면 맨 위, 종류별로 나눠 보인다(2026-10-27 · 종류 나누기 2026-11-11)
+      let firstSec = true;
+      ["lecsupp", "guide"].forEach(function (k) {
+        const dq = docsOf(subj.id, k);
+        if (!dq.length) return;
+        html += '<h3 class="sec"' + (firstSec ? ' style="margin-top:0"' : "") + ">" + esc(DOCKIND[k].sec) +
+          ' <span class="hint">' + esc(DOCKIND[k].hint) + "</span></h3>" +
           '<div class="quiz-grid">' + dq.map(docCard).join("") + "</div>";
-      }
+        firstSec = false;
+      });
       if (lq.length) {
         const groups = [], byWeek = {};
         lq.forEach(function (qz) {
           if (!byWeek[qz.week]) { byWeek[qz.week] = []; groups.push(byWeek[qz.week]); }
           byWeek[qz.week].push(qz);
         });
-        if (dq.length) html += '<h3 class="sec">연습 문제 <span class="hint">강의 주차별 문항</span></h3>';
+        if (!firstSec) html += '<h3 class="sec">연습 문제 <span class="hint">강의 주차별 문항</span></h3>';   // 위에 PDF 칸이 있으면 제목을 단다
         html += '<div class="quiz-grid">' + groups.map(function (g) { return g.length > 1 ? weekGroupCard(g) : quizCard(g[0], g[0].questions.length); }).join("") +
           (subj.mixRanges ? subj.mixRanges.map(function (r) { return quizCard(quizMeta("MIX:" + subj.id + ":" + r.key), 20); }).join("") : quizCard(quizMeta("MIX:" + subj.id), 20)) + "</div>";
       }
