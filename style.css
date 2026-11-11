@@ -416,3 +416,10 @@ body.locked .topbar { display: none; }
   .sync-chip { padding: 3px 6px; font-size: 11px; }
   #authBtn { max-width: 5em; padding: 6px 8px; font-size: 13.5px; }
 }
+
+/* 주차별 기출 세트(2026-11-10): 함께 알기, 강의록 근거 없는 선지 */
+.together { margin-top: 14px; padding: 10px 14px; border-radius: 11px; background: var(--quote); border-left: 3px solid var(--accent); font-size: 14px; color: var(--ink-2); }
+.together b { display: block; color: var(--accent); margin-bottom: 4px; }
+.together ul { margin: 0; padding-left: 18px; }
+.together li + li { margin-top: 3px; }
+.ex-quote.none { opacity: .75; font-style: normal; }

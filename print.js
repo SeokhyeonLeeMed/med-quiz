@@ -65,6 +65,8 @@
       }
       if (q0.t === "pick") return { n: k + 1, lab: String(k + 1), qz: qz, q: q, order: order, ans: -1, ansSet: q.a, ansText: q.a.map((x) => PICKLAB[x].charAt(0)).join(",") };
       if (q0.t === "self") return { n: k + 1, lab: String(k + 1), qz: qz, q: q, order: order, ans: -1, ansSet: [], ansText: "서술" };
+      // 여러 개 고르기(주차별 기출 세트, 2026-11-10): 섞인 순서의 번호를 차례로
+      if (q0.t === "multi") return { n: k + 1, lab: String(k + 1), qz: qz, q: q, order: order, ans: -1, ansSet: q.a, ansText: q.a.map((x) => order.indexOf(x)).sort((a, b) => a - b).map((d) => CIRC[d]).join("") };
       const ans = order.indexOf(q.a);
       return { n: k + 1, lab: String(k + 1), qz: qz, q: q, order: order, ans: ans, ansText: CIRC[ans] };
     });
@@ -82,9 +84,10 @@
   function docMeta(quizId) {
     const X = A();
     if (quizId.indexOf("MIX:") === 0) {
-      const sid = quizId.slice(4), s = X.subject(sid) || { name: sid };
+      const sid = quizId.split(":")[1], s = X.subject(sid) || { name: sid };
+      const head = X.quizMeta ? X.quizMeta(quizId).title.replace("과목 전체", "전체 범위") : "전체 범위 랜덤 20문제";
       return { type: "mix", id: quizId, sid: sid, subject: s.name, grade: s.grade, term: s.term, shuffle: true,
-        head: "전체 범위 랜덤 20문제", round: "", name: s.name + " 랜덤 20문제" };
+        head: head, round: "", name: s.name + " " + head };
     }
     const qz = X.quiz(quizId);
     if (!qz) return null;
@@ -102,7 +105,7 @@
     if (m.type === "exam") return examItems(m.qz);
     if (m.type === "mix") {
       const refs = [];
-      X.lectureQuizzes(m.sid).forEach((qz) => qz.questions.forEach((_, i) => refs.push({ qz: qz, i: i })));
+      (X.mixQuizzes ? X.mixQuizzes(m.id) : X.lectureQuizzes(m.sid)).forEach((qz) => qz.questions.forEach((_, i) => refs.push({ qz: qz, i: i })));
       const rnd = rng(seedOf(code + "|" + m.id));
       return prepareItems(X.shuffle(refs, rnd).slice(0, 20), rnd);
     }
@@ -626,8 +629,8 @@
       const stem = lines[0], bogi = lines.slice(1).filter((l) => l.trim());
       // 1) 문항 머리 + 문항 다시 보기
       // 고르기형(pick)은 정답이 여럿(가,다,마), 단답형(self)은 모범 답안(h)
-      const tp = q.t || "mc", isAns = (di) => (tp === "pick" ? it.ansSet.indexOf(it.order[di]) >= 0 : di === it.ans);
-      const head = [R(it.lab + "번", { b: 1, c: BLUE, sz: 12 }), R("     정답 " + (tp === "self" ? q.h : tp === "pick" ? it.ansText : CIRC[it.ans]), { b: 1, c: RED, sz: 11 })];
+      const tp = q.t || "mc", isAns = (di) => ((tp === "pick" || tp === "multi") ? it.ansSet.indexOf(it.order[di]) >= 0 : di === it.ans);
+      const head = [R(it.lab + "번", { b: 1, c: BLUE, sz: 12 }), R("     정답 " + (tp === "self" ? q.h : (tp === "pick" || tp === "multi") ? it.ansText : CIRC[it.ans]), { b: 1, c: RED, sz: 11 })];
       if (combo) head.push(R("  (" + q.o[q.a] + ")", { b: 1, c: RED, sz: 10 }));
       if (m.type === "mix") head.push(R("     " + qz.week + " " + qz.title, { c: GRAY, sz: 9 }));   // 랜덤: 어느 회차 문항인지
       const u1 = [P({ sz: 12, bf: 14, af: 2, bdr: { sz: 0.75, c: BLUE, sp: 1 } }, head)];
@@ -654,6 +657,8 @@
         });
       }
       units.push(u1);
+      // 문항 메모(주차별 기출 세트)
+      if (q.note) units.push([P({ sz: 8.5, bf: 2, af: 4, il: TW(113) }, [R("※ ", { c: GRAY })].concat(runs(q.note, { c: GRAY })))]);
       // 2) 기본 개념
       if (q.c) {
         units.push([
@@ -678,19 +683,20 @@
         rows.forEach(function (row) {
           const o = row.o, di = row.di, e = row.e;
           const ref = X.refInfo(qz, e[1]);
-          const gk = noImg ? "o" + o : ref.src;
-          if (!byKey[gk]) { byKey[gk] = { ref: ref, page: e[1], items: [] }; groups.push(byKey[gk]); }
-          const ok = tp === "self" ? true : tp === "pick" ? it.ansSet.indexOf(o) >= 0 : o === q.a;
+          const none = !e[1];   // 2026 강의록에 근거가 없는 선지(주차별 기출 세트)
+          const gk = noImg || none ? "o" + o : ref.src;
+          if (!byKey[gk]) { byKey[gk] = { ref: ref, page: e[1], items: [], none: none }; groups.push(byKey[gk]); }
+          const ok = tp === "self" ? true : (tp === "pick" || tp === "multi") ? it.ansSet.indexOf(o) >= 0 : o === q.a;
           byKey[gk].items.push({ lab: di < 0 ? "" : lab(q, di), self: di < 0, ok: ok, ex: String(e[0]).replace(/^정답[.:]?\s*/, ""), quote: e[2], correct: ok });
         });
         // 정답이 든 묶음을 먼저
         groups.sort((a, b) => (b.items.some((x) => x.correct) ? 1 : 0) - (a.items.some((x) => x.correct) ? 1 : 0));
       }
-      const imgs = noImg ? [] : await Promise.all(groups.map((g) => loadImg(g.ref.src)));
+      const imgs = noImg ? [] : await Promise.all(groups.map((g) => (g.none ? null : loadImg(g.ref.src))));
       let firstUnit = true;
       groups.forEach(function (g, gi) {
         const sameQuote = g.items.every((x) => x.quote === g.items[0].quote);
-        const quoteP = (qt) => P({ sz: 8, il: TW(397), af: 1 }, [R(srcLabel(qz, g.page) + "   ", { b: 1, c: GRAY }), R("“" + qt + "”", { i: 1, c: GRAY })]);
+        const quoteP = (qt) => g.none ? P({ sz: 8, il: TW(397), af: 1 }, [R("강의록 근거 없음 — 2026 강의록에서 다루지 않은 내용", { c: GRAY })]) : P({ sz: 8, il: TW(397), af: 1 }, [R(srcLabel(qz, g.page) + "   ", { b: 1, c: GRAY }), R("“" + qt + "”", { i: 1, c: GRAY })]);
         g.items.forEach(function (x, xi) {
           const lab = combo ? R(x.lab, { b: 1 }) : R(x.lab, x.correct ? { b: 1, c: RED } : { b: 1 });
           const verdict = combo ? (x.ok ? R("옳음   ", { b: 1, c: GREEN }) : R("틀림   ", { b: 1, c: RED }))
@@ -709,6 +715,14 @@
           units.push(u);
         });
       });
+      // 4) 함께 알기(주차별 기출 세트, 2026-11-10)
+      if (q.tg && q.tg.length) {
+        units.push([
+          P({ sz: 10, bf: 6, af: 2 }, [R("▶ 함께 알기", { b: 1, c: BLUE })]),
+          { k: "box", w: BODY_W, fill: "EAF2FB", mt: 0, mb: 0, ml: TW(113), mr: TW(113), items: q.tg.map((t) => P({ sz: 9, il: TW(170), hg: TW(170) }, [R("•", { c: BLUE }), TAB].concat(runs(t)))) },
+          SP(4)
+        ]);
+      }
     }
     return units;
   }
@@ -759,7 +773,13 @@
     await fontsReady(JSON.stringify(items.map((it) => it.q)) + m.name + "①②③④⑤■“”‘’0123456789번정답오답옳음틀림쪽강의판인쇄");
     if (kind === "exam") {
       const units = [];
-      for (const it of items) units.push(it.exam ? await examQuestionX(it) : examQuestion(it));
+      for (const it of items) {
+        if (it.exam) { units.push(await examQuestionX(it)); continue; }
+        const u = examQuestion(it);
+        // 주차별 기출 세트의 문항 그림(2026-11-10): 발문 아래에
+        if (it.q.figs && it.q.figs.length) u.splice(1, 0, ...(await figItems(it.q, COL_W - numHang(it.lab), numHang(it.lab))));
+        units.push(u);
+      }
       const L = layoutExam(units, examTitle(m));
       return { kind: kind, qz: m, meta: m, code: code, L: L, html: examPagesHTML(L, m, code), nPages: L.pages.length };
     }

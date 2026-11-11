@@ -216,14 +216,24 @@
   }
   function qNumLabel(r) { return isExam(r.quiz) ? (r.q.label || r.q.n) + "번" : (r.idx + 1) + "번"; }
   function isMix(id) { return id.indexOf("MIX:") === 0; }
+  // 랜덤 20문제: "MIX:과목"(전체) 또는 "MIX:과목:범위"(과목의 mixRanges — 예: 중간·기말, 2026-11-11)
+  function mixRange(id) {
+    const p = id.split(":"), s = SUBJ[p[1]];
+    return p[2] && s && s.mixRanges ? s.mixRanges.filter(function (r) { return r.key === p[2]; })[0] || null : null;
+  }
+  function weekNum(qz) { const m = String(qz.week || "").match(/(\d+)/); return m ? +m[1] : 0; }
+  function mixQuizzes(id) {
+    const r = mixRange(id);
+    return lectureQuizzes(subjectOf(id)).filter(function (qz) { return !r || (weekNum(qz) >= r.from && weekNum(qz) <= r.to); });
+  }
   function quizMeta(id) {
     if (isMix(id)) {
-      const s = SUBJ[id.slice(4)] || { name: id.slice(4) };
-      return { id: id, subjectId: id.slice(4), week: s.name, title: "과목 전체 랜덤 20문제" };
+      const s = SUBJ[subjectOf(id)] || { name: subjectOf(id) }, r = mixRange(id);
+      return { id: id, subjectId: subjectOf(id), week: s.name, title: r ? r.label + " 랜덤 20문제" : "과목 전체 랜덤 20문제" };
     }
     return BY_ID[id] || { id: id, subjectId: id.split("-")[0], week: "", title: id + " (삭제된 퀴즈)" };
   }
-  function subjectOf(id) { return isMix(id) ? id.slice(4) : id.split("-")[0]; }
+  function subjectOf(id) { return isMix(id) ? id.split(":")[1] : id.split("-")[0]; }
   function pct(a) { return a.total ? Math.round(a.score / a.total * 100) : 0; }
   function fmtDate(ts) {
     const d = new Date(ts);
@@ -296,24 +306,35 @@
   let session = null;     // 지금 푸는 세션
   let repairDirty = false;
 
-  // 조합형(ㄱㄴㄷㄹ·I II III IV) 선지는 개수→글자 오름차순으로 저장되어 있으므로 섞지 않고 저장된 순서대로 보인다
-  function isComboQ(q) {
-    return q.o.length > 0 && (q.o.every(function (o) { return /^[ㄱ-ㅎ](, [ㄱ-ㅎ])*$/.test(o); }) ||
-      q.o.every(function (o) { return /^(I|II|III|IV)(, (I|II|III|IV))*$/.test(o); }));
+  // 조합형 보기 글자(2026-11-05: 기출을 뺀 모든 조합형에 같은 규칙 — ㄱㄴㄷㄹ·가나다라·I II III IV·ABCD·abcd)
+  const COMBO_FAMS = [["ㄱ", "ㄴ", "ㄷ", "ㄹ", "ㅁ"], ["가", "나", "다", "라", "마"], ["I", "II", "III", "IV", "V"], ["A", "B", "C", "D", "E"], ["a", "b", "c", "d", "e"]];
+  // 선지가 모두 "가, 나"처럼 한 종류 글자의 조합이고 발문에 그 글자의 보기 줄("가. …")이 둘 이상 있으면 조합형이다.
+  // 돌려주는 값: { L: 보기 글자들, stem: 보기 앞 줄들, stm: [{l, text}] }
+  function comboInfo(q) {
+    if (!q || !q.o || !q.o.length || qType(q) !== "mc") return null;
+    for (let f = 0; f < COMBO_FAMS.length; f++) {
+      const F = COMBO_FAMS[f];
+      if (!q.o.every(function (o) { return /^[^,\s]+(, [^,\s]+)*$/.test(o) && String(o).split(", ").every(function (l) { return F.indexOf(l) >= 0; }); })) continue;
+      const stem = [], stm = [];
+      String(q.q).split(NL).forEach(function (l) {
+        const m = l.match(/^(\S+)\. (.*)$/);
+        if (m && F.indexOf(m[1]) >= 0) stm.push({ l: m[1], text: m[2] }); else if (!stm.length) stem.push(l);
+      });
+      if (stm.length < 2) continue;
+      return { L: F.slice(0, stm.length), stem: stem, stm: stm };
+    }
+    return null;
   }
-  // 조합형 문항을 풀 때마다 새로 만든다(선지 순서 섞기가 켜져 있을 때): 보기 문장을 섞어 ㄱㄴㄷㄹ(I II III IV)을 다시 붙이고,
+  // 조합형 선지는 개수→글자 오름차순으로 저장되어 있으므로 섞지 않고 저장된 순서대로 보인다
+  function isComboQ(q) { return !!comboInfo(q); }
+  // 조합형 문항을 풀 때마다 새로 만든다(선지 순서 섞기가 켜져 있을 때): 보기 문장을 섞어 글자를 다시 붙이고,
   // 정답 조합이 정해지면 나머지 선지 4개는 정답을 뺀 모든 조합에서 무작위로 뽑아 개수 오름차순·글자 오름차순으로 정렬한다.
-  // 보기별 해설(sx)은 문장에 붙어 다니므로 글자만 바꾼다.
+  // 보기별 해설(sx)은 문장에 붙어 다니므로 글자만 바꾼다. 기출은 복기한 실제 선지를 지키므로 sx가 없어 여기서 빠진다.
   function makeVariant(q, rnd) {
-    if (!q.sx || !isComboQ(q)) return null;
-    const isKo = q.o.every(function (o) { return /^[ㄱ-ㅎ](, [ㄱ-ㅎ])*$/.test(o); });
-    const L = isKo ? ["ㄱ", "ㄴ", "ㄷ", "ㄹ"] : ["I", "II", "III", "IV"], N = L.length;
-    const stem = [], stm = [];
-    String(q.q).split(NL).forEach(function (l) {
-      const m = l.match(/^(ㄱ|ㄴ|ㄷ|ㄹ|IV|III|II|I)\. (.*)$/);
-      if (m) stm.push({ l: m[1], text: m[2] }); else if (!stm.length) stem.push(l);
-    });
-    if (stm.length !== N) return null;
+    const info = q.sx ? comboInfo(q) : null;
+    if (!info) return null;
+    const L = info.L, N = L.length, stem = info.stem, stm = info.stm;
+    if (stm.some(function (x, i) { return x.l !== L[i]; })) return null;
     const sxBy = {}; q.sx.forEach(function (x) { sxBy[x[0]] = x; });
     if (!L.every(function (l) { return sxBy[l]; })) return null;
     const corr = q.o[q.a].split(",").map(function (x) { return x.trim(); });
@@ -426,7 +447,7 @@
     let keys;
     if (isMix(quizId)) {
       const all = [];
-      lectureQuizzes(subjectOf(quizId)).forEach(function (qz) { qz.questions.forEach(function (_, i) { all.push(qz.id + "#" + i); }); });
+      mixQuizzes(quizId).forEach(function (qz) { qz.questions.forEach(function (_, i) { all.push(qz.id + "#" + i); }); });
       keys = shuffle(all).slice(0, 20);
       mode = "mix";
     } else if (mode === "wrong") {
@@ -553,9 +574,22 @@
   }
 
   // ---------- rendering: explanations ----------
+  // 주차별 기출 세트(2026-11-10): 문항 메모(note), 함께 알기(tg), 강의록 근거가 없는 선지(쪽 null)
   function explanationHTML(key, order, chosenOrig, rOverride) {
     const r = rOverride || qByKey(key);
     if (isExam(r.quiz)) return examExplanationHTML(r, chosenOrig);
+    const q = r.q;
+    let html = lectureExplanationHTML(r, order, chosenOrig);
+    if (q.note) html = '<div class="xnote">' + fmt(q.note) + "</div>" + html;
+    if (q.tg && q.tg.length) html += '<div class="together"><b>함께 알기</b><ul>' + q.tg.map(function (t) { return "<li>" + fmt(t) + "</li>"; }).join("") + "</ul></div>";
+    return html;
+  }
+  // 근거 인용 칸: 쪽이 없으면(2026 강의록에 없는 내용) 인용·사진 없이 안내만
+  function quoteHTML(ref, ex, extra) {
+    if (!ex[1]) return '<blockquote class="ex-quote none"><span class="src">강의록 근거 없음</span>2026 강의록에서 다루지 않은 내용입니다.</blockquote>';
+    return '<blockquote class="ex-quote"><span class="src">강의노트 ' + esc(ref.long) + (extra || "") + "</span>" + fmt(ex[2]) + "</blockquote>";
+  }
+  function lectureExplanationHTML(r, order, chosenOrig) {
     const q = r.q;
     let html = "";
     if (q.c) html += '<div class="concept"><b>기본 개념</b>' + fmt(q.c) + "</div>";
@@ -565,10 +599,11 @@
       html = '<div class="exam-ans"><b>모범 답안</b> ' + fmt(q.h || "") + "</div>" + html + '<div class="ex-list">';
       (q.e || []).forEach(function (ex) {
         const ref = refInfo(r.quiz, ex[1]);
-        html += '<div class="ex' + (r.quiz.noImg ? " noimg" : "") + ' is-correct"><div><div class="ex-item is-correct">' +
+        const noImg = r.quiz.noImg || !ex[1];
+        html += '<div class="ex' + (noImg ? " noimg" : "") + ' is-correct"><div><div class="ex-item is-correct">' +
           '<div class="ex-why">' + fmt(ex[0]) + "</div>" +
-          '<blockquote class="ex-quote"><span class="src">강의노트 ' + esc(ref.long) + "</span>" + fmt(ex[2]) + "</blockquote></div></div>" +
-          (r.quiz.noImg ? "" : thumbHTML(ref, ref.long + " — " + ex[2])) + "</div>";
+          quoteHTML(ref, ex) + "</div></div>" +
+          (noImg ? "" : thumbHTML(ref, ref.long + " — " + ex[2])) + "</div>";
       });
       return html + "</div>";
     }
@@ -581,8 +616,9 @@
     const groups = [], bySrc = {};
     order.forEach(function (orig, di) {
       const ref = refInfo(r.quiz, q.e[orig][1]);
-      const gk = noImg ? "o" + orig : ref.src;
-      if (!bySrc[gk]) { bySrc[gk] = { ref: ref, items: [] }; groups.push(bySrc[gk]); }
+      const none = !q.e[orig][1];
+      const gk = noImg || none ? "o" + orig : ref.src;
+      if (!bySrc[gk]) { bySrc[gk] = { ref: ref, items: [], none: none }; groups.push(bySrc[gk]); }
       bySrc[gk].items.push({ orig: orig, di: di });
     });
     html += '<div class="ex-list">';
@@ -603,26 +639,23 @@
           '<div class="ex-head">' + optLab(q, it.di) + " " + pills + "</div>" +
           '<div class="ex-opt">' + fmt(q.o[it.orig]) + "</div>" +
           '<div class="ex-why">' + fmt(ex[0]) + "</div>" +
-          '<blockquote class="ex-quote"><span class="src">강의노트 ' + esc(g.ref.long) + (many ? " · " + optLab(q, it.di) + " 근거" : "") + "</span>" +
-            fmt(ex[2]) + "</blockquote></div>";
+          quoteHTML(g.ref, ex, many ? " · " + optLab(q, it.di) + " 근거" : "") + "</div>";
         if (quotes.indexOf(ex[2]) < 0) quotes.push(ex[2]);
       });
-      html += '<div class="ex' + (many ? " grouped" : "") + (noImg ? " noimg" : "") + (hasCorrect ? " is-correct" : (hasChosenWrong ? " is-chosen-wrong" : "")) + '">' +
+      html += '<div class="ex' + (many ? " grouped" : "") + (noImg || g.none ? " noimg" : "") + (hasCorrect ? " is-correct" : (hasChosenWrong ? " is-chosen-wrong" : "")) + '">' +
         "<div>" + body + "</div>" +
-        (noImg ? "" : thumbHTML(g.ref, g.ref.long + " — " + quotes.join(" / "))) +
+        (noImg || g.none ? "" : thumbHTML(g.ref, g.ref.long + " — " + quotes.join(" / "))) +
         "</div>";
     });
     return html + "</div>";
   }
 
-  // ㄱㄴㄷㄹ · I II III IV 조합형: 선지 번호가 아니라 보기 하나하나를 해설하고, 슬라이드도 보기별로 연결한다
+  // 조합형(ㄱㄴㄷㄹ·가나다라·I II III IV·ABCD): 선지 번호가 아니라 보기 하나하나를 해설하고, 슬라이드도 보기별로 연결한다
   function comboExplanationHTML(r, order, chosenOrig) {
     const q = r.q, noImg = !!r.quiz.noImg;
     const stm = {};
-    String(q.q).split(NL).forEach(function (l) {
-      const m = l.match(/^(ㄱ|ㄴ|ㄷ|ㄹ|IV|III|II|I)\. (.*)$/);
-      if (m) stm[m[1]] = m[2];
-    });
+    const info = comboInfo(q);
+    (info ? info.stm : []).forEach(function (x) { stm[x.l] = x.text; });
     const split = function (s) { return s.split(",").map(function (x) { return x.trim(); }); };
     const ansDi = order.indexOf(q.a);
     let html = '<div class="sx-sum"><b>정답</b> ' + CIRCLED[ansDi] + " " + esc(q.o[q.a]);
@@ -796,15 +829,15 @@
   // 기출은 판(복기 원본 / Claude 보완)을 한 카드에 묶는다
   function weekGroupCard(list, exam) {
     const first = list[0];
-    const base = exam ? first.title.replace(/ \(Claude 보완\)$/, "") : first.title.replace(/ \d+회$/, "");
+    const base = exam ? first.title.replace(/ \(Claude 보완\)$/, "") : first.title.replace(/ (?:\d+회|기출)$/, "");
     const rows = list.map(function (meta) {
       const fa = fullAttempts(meta.id);
       const last = lastAttempt(meta.id);
       const best = fa.reduce(function (m, a) { return Math.max(m, pct(a)); }, 0);
       const wrongN = last ? last.items.filter(function (i) { return !i.correct; }).length : 0;
-      const m = meta.title.match(/(\d+회)$/) || meta.title.match(/\((CBT 반영(?: \d+회)?)\)$/);   // "… (CBT 반영)"·"… (CBT 반영 2회)" 세트(2026-10-27, 회차 2026-11-03)
+      const m = meta.title.match(/(\d+회|기출)$/) || meta.title.match(/\((CBT 반영(?: \d+회)?)\)$/);   // "… 기출": 주차별 기출 세트(2026-11-10)   // "… (CBT 반영)"·"… (CBT 반영 2회)" 세트(2026-10-27, 회차 2026-11-03)
       return '<div class="round">' +
-        '<div class="round-info"><b>' + esc(exam ? meta.ver || meta.title : m ? m[1] : meta.title) + "</b>" +
+        '<div class="round-info"><b>' + esc(exam ? meta.ver || meta.title : m ? m[1] : "연습 문제") + "</b>" +
           '<span class="meta"><span>' + meta.questions.length + "문항</span>" +
           (fa.length ? "<span>응시 <b>" + fa.length + "</b>회</span><span>최근 <b>" + pct(fa[fa.length - 1]) + "%</b></span><span>최고 <b>" + best + "%</b></span>" : "<span>응시 기록 없음</span>") +
           "</span>" + (fa.length ? sparkSVG(fa.map(pct)) : "") + "</div>" +
@@ -930,7 +963,7 @@
         });
         if (dq.length) html += '<h3 class="sec">연습 문제 <span class="hint">강의 주차별 문항</span></h3>';
         html += '<div class="quiz-grid">' + groups.map(function (g) { return g.length > 1 ? weekGroupCard(g) : quizCard(g[0], g[0].questions.length); }).join("") +
-          quizCard(quizMeta("MIX:" + subj.id), 20) + "</div>";
+          (subj.mixRanges ? subj.mixRanges.map(function (r) { return quizCard(quizMeta("MIX:" + subj.id + ":" + r.key), 20); }).join("") : quizCard(quizMeta("MIX:" + subj.id), 20)) + "</div>";
       }
       if (eq.length) {
         html += '<h3 class="sec">기출 문제 <span class="hint">해설지 원고 기반 · 서술형·복기 실패 문항은 해설을 보고 스스로 채점</span></h3>' +
@@ -1001,6 +1034,11 @@
     if (exam) html += examStemHTML(r, esc(String(r.q.label || r.q.n)));   // 기출은 시험 문항 번호(복기 안 된 번호는 건너뛴다)
     if (exam && q.notes && q.notes.length) html += '<div class="xnote">' + q.notes.map(function (n) { return "<div>" + fmt(n) + "</div>"; }).join("") + "</div>";
     if (!exam) html += '<p class="qtext">' + num + ". " + fmt(stemOf(q.q)) + "</p>" + (bogiOf(q.q) ? '<div class="bogi">' + fmt(bogiOf(q.q)) + "</div>" : "");
+    // 주차별 기출 세트의 문항 그림(원본 시험지에서 잘라 둔 것)
+    if (!exam && q.figs && q.figs.length) html += '<div class="figs">' + q.figs.map(function (src) {
+      return '<button type="button" class="thumb figimg" data-src="' + esc(src) + '" data-cap="' + esc(num + "번 그림") + '" title="크게 보기">' +
+        '<img data-img="' + esc(src) + '" alt="' + esc(num + "번 그림") + '"></button>';
+    }).join("") + "</div>";
 
     // 선지
     if (q.o.length) {
@@ -1328,7 +1366,7 @@
     let html = "<h1>기록</h1>" +
       pickerHTML();
     if (!subj) { setHTML(html); return; }
-    const ids = quizzesOfSubject(subj.id).map(function (q) { return q.id; }).concat(["MIX:" + subj.id]);
+    const ids = quizzesOfSubject(subj.id).map(function (q) { return q.id; }).concat(subj.mixRanges ? subj.mixRanges.map(function (r) { return "MIX:" + subj.id + ":" + r.key; }) : ["MIX:" + subj.id]);
     h.forEach(function (a) { if (subjectOf(a.quizId) === subj.id && ids.indexOf(a.quizId) < 0) ids.push(a.quizId); });
     let any = false;
     ids.forEach(function (id) {
@@ -1718,7 +1756,7 @@
     settings: function () { return settings; },
     refInfo: refInfo, isComboQ: isComboQ, makeVariant: makeVariant, shuffle: shuffle, range: range,
     fixedOrder: fixedOrder, imgURL: imgURL, stemOf: stemOf, bogiOf: bogiOf,
-    lectureQuizzes: lectureQuizzes, isExam: isExam
+    lectureQuizzes: lectureQuizzes, isExam: isExam, mixQuizzes: mixQuizzes, quizMeta: quizMeta
   };
   if (window.QUIZ_BOOT) window.QUIZ_BOOT(function () { init([]); });
   else loadData(window.QUIZ_FILES || [], init);
