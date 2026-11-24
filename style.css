@@ -22,7 +22,10 @@
   --quote: #f6f7f9;
   --shadow: none;
   --radius: 3px;
-  --font: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "맑은 고딕", "Segoe UI", "Noto Sans KR", sans-serif;
+  /* 글꼴은 app.js의 setupFont가 html 요소의 인라인 스타일로 덮어쓴다(고른 값은 이 브라우저에 기억).
+     --font 전체 화면 / --qfont 문제·해설 글. 기본은 전체 Noto Sans, 문제 맑은 고딕. */
+  --font: "Noto Sans", "Noto Sans KR", -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Segoe UI", sans-serif;
+  --qfont: "Malgun Gothic", "맑은 고딕", "Apple SD Gothic Neo", -apple-system, "Noto Sans KR", sans-serif;
 }
 /* 다크 모드: 기기 설정을 따르되(자동), 사용자가 고르면 그것을 따른다(html[data-theme]) */
 @media (prefers-color-scheme: dark) {
@@ -107,6 +110,28 @@ b, strong { font-weight: 700; }
 .navbtn:hover { color: var(--bar-ink); background: rgba(255,255,255,.06); }
 .navbtn.active { color: var(--bar-ink); border-bottom-color: var(--bar-ink); font-weight: 700; }
 .theme-btn { padding: 2px 10px 0; }
+.font-btn { padding: 2px 10px 0; font-weight: 700; }
+
+/* ---------- 글꼴 고르기 창(도구막대 '가' 단추) ---------- */
+.fontpop {
+  position: fixed; right: 8px; z-index: 40; width: 288px; max-width: calc(100vw - 16px);
+  padding: 12px 14px 12px; background: var(--surface); color: var(--ink);
+  border: 1px solid var(--ink-3); border-radius: var(--radius);
+}
+.fontpop[hidden] { display: none; }
+.fontpop h2 { margin: 0 0 10px; font-size: 13px; font-weight: 700; color: var(--ink-2); }
+.fp-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; font-size: 13.5px; }
+.fp-row label { flex: none; color: var(--ink-2); }
+.fp-row select {
+  flex: 1; min-width: 0; font: inherit; font-size: 13.5px; padding: 4px 6px;
+  border: 1px solid var(--line); border-radius: 2px; background: var(--surface); color: var(--ink);
+}
+.fp-row select:focus { outline: none; border-color: var(--accent); }
+.fp-samp { margin: 10px 0 0; padding: 8px 10px; border: 1px solid var(--line-2); background: var(--surface-2); font-size: 13.5px; line-height: 1.5; }
+.fp-samp .s1 { font-family: var(--font); }
+.fp-samp .s2 { font-family: var(--qfont); margin-top: 4px; }
+.fp-samp em { font-style: normal; color: var(--ink-3); font-size: 11.5px; margin-right: 5px; }
+.fp-foot { display: flex; justify-content: flex-end; gap: 6px; margin-top: 10px; }
 
 /* 저장 표시(도구막대 위) */
 .sync-chip {
@@ -265,6 +290,8 @@ h3.sec { font-size: 15px; font-weight: 700; margin: 26px 0 8px; display: flex; g
 .qmap-grid button.cur.ok { color: var(--ok); border-color: var(--accent); }
 .qmap-grid button.cur.bad { color: var(--bad); border-color: var(--accent); }
 
+/* 문제·선지·해설과 다시 보기는 '문제 글꼴'(--qfont)로 쓴다. 나머지 화면은 --font */
+.qcard, .review-item { font-family: var(--qfont); }
 .qcard { padding: 22px 26px 18px; }
 .qsrc { font-size: 12.5px; color: var(--ink-3); margin-bottom: 8px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .qtext { font-size: 17px; font-weight: 400; line-height: 1.7; margin: 0 0 18px; white-space: normal; }

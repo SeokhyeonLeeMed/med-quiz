@@ -1288,6 +1288,96 @@
   }
   setupTheme();
 
+  // ---------- 글꼴 ----------
+  // 전체 화면(--font)과 문제·해설(--qfont)을 따로 고른다. 기본은 전체 Noto Sans, 문제 맑은 고딕.
+  // 고른 값은 이 브라우저에 기억하고(mq_font), index.html 머리의 짧은 스크립트가 처음부터 입힌다.
+  // 컴퓨터에 없는 글꼴은 웹 글꼴을 그때 받아 온다(url). 받아 오는 동안에는 뒤쪽 글꼴로 보인다.
+  const GF = "https://fonts.googleapis.com/css2?family=";
+  const FONTS = [
+    { id: "noto", name: "Noto Sans", css: '"Noto Sans","Noto Sans KR",-apple-system,"Segoe UI",sans-serif', url: GF + "Noto+Sans:wght@400;500;700&family=Noto+Sans+KR:wght@400;500;700&display=swap" },
+    { id: "malgun", name: "맑은 고딕", css: '"Malgun Gothic","맑은 고딕","Apple SD Gothic Neo",-apple-system,sans-serif' },
+    { id: "system", name: "시스템 기본", css: '-apple-system,BlinkMacSystemFont,"Segoe UI","Apple SD Gothic Neo","Malgun Gothic",sans-serif' },
+    { id: "pretendard", name: "Pretendard", css: '"Pretendard Variable",Pretendard,sans-serif', url: "https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" },
+    { id: "nanum", name: "나눔고딕", css: '"Nanum Gothic",NanumGothic,sans-serif', url: GF + "Nanum+Gothic:wght@400;700&display=swap" },
+    { id: "gothica1", name: "Gothic A1", css: '"Gothic A1",sans-serif', url: GF + "Gothic+A1:wght@400;500;700&display=swap" },
+    { id: "plex", name: "IBM Plex Sans KR", css: '"IBM Plex Sans KR",sans-serif', url: GF + "IBM+Plex+Sans+KR:wght@400;500;700&display=swap" },
+    { id: "notokr", name: "Noto Sans KR", css: '"Noto Sans KR",sans-serif', url: GF + "Noto+Sans+KR:wght@400;500;700&display=swap" }
+  ];
+  const FONT_DEF = { ui: "noto", q: "malgun" };
+  function fontById(id, fb) {
+    return FONTS.find(function (f) { return f.id === id; }) ||
+      FONTS.find(function (f) { return f.id === fb; }) || FONTS[0];
+  }
+  let fontPref = Object.assign({}, FONT_DEF, load("mq_font", {}));
+  function ensureWebFont(list) {
+    const want = list.map(function (f) { return f.url; }).filter(Boolean);
+    Array.prototype.forEach.call(document.querySelectorAll("link[data-mqfont]"), function (l) {
+      if (want.indexOf(l.getAttribute("data-mqfont")) < 0) l.remove();
+    });
+    want.forEach(function (u) {
+      if (document.querySelector('link[data-mqfont="' + u + '"]')) return;
+      const l = document.createElement("link");
+      l.rel = "stylesheet"; l.setAttribute("data-mqfont", u); l.href = u;
+      document.head.appendChild(l);
+    });
+  }
+  function applyFonts() {
+    const ui = fontById(fontPref.ui, FONT_DEF.ui), q = fontById(fontPref.q, FONT_DEF.q);
+    const r = document.documentElement;
+    r.style.setProperty("--font", ui.css);
+    r.style.setProperty("--qfont", q.css);
+    ensureWebFont([ui, q]);
+    save("mq_font", { ui: ui.id, q: q.id, uiCss: ui.css, qCss: q.css, uiUrl: ui.url || null, qUrl: q.url || null });
+  }
+  function setupFont() {
+    const nav = document.querySelector(".topnav");
+    if (!nav || document.getElementById("fontBtn")) return;
+    const b = document.createElement("button");
+    b.type = "button"; b.id = "fontBtn"; b.className = "navbtn font-btn"; b.textContent = "가";
+    b.title = "글꼴 고르기"; b.setAttribute("aria-label", b.title);
+    const pop = document.createElement("div");
+    pop.className = "fontpop"; pop.id = "fontPop"; pop.hidden = true;
+    const opts = function (sel) {
+      return FONTS.map(function (f) {
+        return '<option value="' + f.id + '"' + (f.id === sel ? " selected" : "") + ">" + esc(f.name) + "</option>";
+      }).join("");
+    };
+    const paint = function () {
+      pop.innerHTML = "<h2>글꼴</h2>" +
+        '<div class="fp-row"><label for="fpUi">전체</label><select id="fpUi">' + opts(fontPref.ui) + "</select></div>" +
+        '<div class="fp-row"><label for="fpQ">문제</label><select id="fpQ">' + opts(fontPref.q) + "</select></div>" +
+        '<p class="fp-samp"><span class="s1"><em>전체</em>과목 선택 · 기록 · 0123</span>' +
+        '<span class="s2" style="display:block"><em>문제</em>다음 중 옳은 것은? ①②③ ABC</span></p>' +
+        '<div class="fp-foot"><button type="button" class="btn small" id="fpReset">기본값</button>' +
+        '<button type="button" class="btn small primary" id="fpClose">닫기</button></div>';
+      pop.querySelector("#fpUi").onchange = function (e) { fontPref.ui = e.target.value; applyFonts(); };
+      pop.querySelector("#fpQ").onchange = function (e) { fontPref.q = e.target.value; applyFonts(); };
+      pop.querySelector("#fpReset").onclick = function () { fontPref = Object.assign({}, FONT_DEF); applyFonts(); paint(); };
+      pop.querySelector("#fpClose").onclick = function () { close(); };
+    };
+    const place = function () {
+      const bar = document.querySelector(".topbar");
+      pop.style.top = ((bar ? bar.getBoundingClientRect().bottom : 46) + 4) + "px";
+    };
+    const close = function () {
+      pop.hidden = true; b.setAttribute("aria-expanded", "false");
+      document.removeEventListener("mousedown", onOut, true);
+      window.removeEventListener("resize", place);
+    };
+    const onOut = function (e) { if (!pop.contains(e.target) && e.target !== b) close(); };
+    b.onclick = function () {
+      if (!pop.hidden) return close();
+      paint(); place(); pop.hidden = false; b.setAttribute("aria-expanded", "true");
+      document.addEventListener("mousedown", onOut, true);
+      window.addEventListener("resize", place);
+    };
+    document.addEventListener("keydown", function (e) { if (e.key === "Escape" && !pop.hidden) close(); });
+    document.body.appendChild(pop);
+    nav.insertBefore(b, nav.firstChild);
+  }
+  applyFonts();
+  setupFont();
+
   // ---------- 관리자 ----------
   // 사용자(승인·승인 취소), 인쇄 기록, 사이트 수정 기록. 비밀번호와 응시 기록은 관리자에게도 보이지 않는다(서버 규칙)
   function addAdminNav() {
