@@ -348,22 +348,23 @@
   // 화면
   // ======================================================================
   const CSS = `
-.au-btn{white-space:nowrap;border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:999px;padding:6px 14px;font-weight:600}
-.au-btn.pri{background:var(--accent);border-color:var(--accent);color:#fff}
+.au-btn{white-space:nowrap;border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:2px;padding:6px 14px;font-weight:400}
+.au-btn.pri{background:var(--accent);border-color:var(--accent);color:var(--on-accent,#fff);font-weight:700}
 .au-btn.au-danger{background:var(--bad);border-color:var(--bad);color:#fff}
 .au-wd summary{cursor:pointer;color:var(--ink-3);font-size:14px}
-.au-ov{position:fixed;inset:0;z-index:300;background:rgba(10,10,10,.55);display:grid;place-items:center;padding:16px}
+.au-ov{position:fixed;inset:0;z-index:300;background:rgba(12,16,22,.6);display:grid;place-items:center;padding:16px}
 .au-ov[hidden]{display:none}
-.au-box{width:min(420px,100%);max-height:calc(100vh - 32px);overflow:auto;background:var(--surface);color:var(--ink);border-radius:16px;box-shadow:var(--shadow);padding:22px 22px 18px;position:relative}
-.au-box h2{margin:0 0 4px;font-size:20px}
+.au-box{width:min(420px,100%);max-height:calc(100vh - 32px);overflow:auto;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-top:3px solid var(--bar,var(--accent));border-radius:2px;padding:20px 22px 18px;position:relative}
+.au-box h2{margin:0 0 4px;font-size:18px}
 .au-box .sub{color:var(--ink-2);font-size:14px;margin:0 0 14px}
 .au-x{position:absolute;right:12px;top:10px;border:0;background:none;font-size:20px;color:var(--ink-3)}
-.au-seg{display:flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-bottom:12px}
+.au-seg{display:flex;border:1px solid var(--line);border-radius:2px;overflow:hidden;margin-bottom:12px}
 .au-seg button{flex:1;border:0;background:none;padding:8px;color:var(--ink-2)}
-.au-seg button.on{background:var(--accent-soft);color:var(--accent);font-weight:700}
+.au-seg button.on{background:var(--accent);color:var(--on-accent,#fff);font-weight:700}
 .au-f{display:flex;flex-direction:column;gap:10px}
 .au-f label{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--ink-2)}
-.au-f input{font:inherit;font-size:15px;padding:9px 11px;border:1px solid var(--line);border-radius:9px;background:var(--bg);color:var(--ink)}
+.au-f input{font:inherit;font-size:15px;padding:8px 10px;border:1px solid var(--line);border-radius:2px;background:var(--surface);color:var(--ink)}
+.au-f input:focus{outline:none;border-color:var(--accent)}
 .au-f .row{display:flex;gap:8px;justify-content:flex-end;align-items:center;margin-top:4px}
 .au-msg{min-height:20px;font-size:13px;color:var(--bad)}
 .au-msg.ok{color:var(--ok)}
@@ -372,13 +373,13 @@
 .au-meta dt{color:var(--ink-3)}.au-meta dd{margin:0}
 .au-sec{border-top:1px solid var(--line);margin-top:14px;padding-top:12px}
 .au-steps{margin:8px 0;padding-left:20px;font-size:14px;line-height:1.6}
-.au-demo{background:var(--quote);border-radius:10px;padding:10px 12px;font-size:13px;word-break:break-all}
+.au-demo{background:var(--quote);border:1px solid var(--line-2,var(--line));padding:10px 12px;font-size:13px;word-break:break-all}
 .au-demo code{font-size:12px}
-.au-pill{display:inline-block;font-size:12px;padding:1px 8px;border-radius:999px;background:var(--surface-2);color:var(--ink-2)}
-.au-pill.ok{background:var(--ok-soft);color:var(--ok)}.au-pill.wait{background:var(--bad-soft);color:var(--bad)}
+.au-pill{display:inline-block;font-size:12px;padding:0 6px;border:1px solid currentColor;border-radius:2px;background:none;color:var(--ink-2)}
+.au-pill.ok{color:var(--ok)}.au-pill.wait{color:var(--bad)}
 #authBtn{max-width:8em;overflow:hidden;text-overflow:ellipsis}
-@media (max-width:640px){.topbar{padding-left:10px;padding-right:10px;gap:6px}.brand-text{display:none}.topnav{gap:2px}.topnav .navbtn{padding:6px 8px}#authBtn{padding:6px 10px;max-width:6em}.sync-chip{font-size:11px;padding:4px 8px}}
-@media (max-width:420px){#authBtn{padding:6px 8px;max-width:4.6em;font-size:13.5px}.sync-chip{padding:3px 6px}}
+@media (max-width:640px){#authBtn{padding:2px 8px;max-width:6em}}
+@media (max-width:420px){#authBtn{padding:2px 6px;max-width:4.6em;font-size:12.5px}}
 @media (max-width:370px){.sync-chip{display:none}}
 `;
   let ov = null, cssOn = false;

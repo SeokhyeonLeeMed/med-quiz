@@ -547,6 +547,15 @@
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
+  // 답안 표기란에서 고른 문항으로 간다(renderQuiz가 아직 닿지 않은 칸은 막아 둔다)
+  function jump(i) {
+    if (!session || i === session.pos || i < 0 || i >= session.keys.length) return;
+    session.pos = i;
+    persist();
+    renderQuiz();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
   function finish() {
     const items = session.keys.map(function (k) {
       const r = qv(k, session);
@@ -741,7 +750,7 @@
     function flush() {
       if (!para.length) return;
       const txt = para.join(NL);
-      out += first ? '<p class="qtext">' + num + ". " + fmt(txt) + "</p>" : '<p class="qmore">' + fmt(txt) + "</p>";
+      out += first ? '<p class="qtext"><span class="qn">' + num + ".</span> " + fmt(txt) + "</p>" : '<p class="qmore">' + fmt(txt) + "</p>";
       first = false; para = [];
     }
     function flushBox() { if (box.length) { out += '<div class="bogi">' + fmt(box.join(NL)) + "</div>"; box = []; } }
@@ -1027,19 +1036,26 @@
     const doneN = Object.keys(session.answers).length;
     const correctN = session.keys.filter(function (k) { return session.answers[k] !== undefined && isRight(qv(k, session).q, session.answers[k]); }).length;
 
-    const dots = '<div class="dots">' + session.keys.map(function (k, i) {
-      const a = session.answers[k];
-      let c = a === undefined ? "" : (isRight(qv(k, session).q, a) ? "ok" : "bad");
-      if (i === session.pos) c += " cur";
-      return '<span class="' + c + '" title="' + (i + 1) + '번"></span>';
-    }).join("") + "</div>";
+    // 답안 표기란(2026-11-25 화면 개편): 번호 칸을 눌러 그 문항으로 간다.
+    // '다음'은 답해야 눌리므로, 아직 답하지 않은 첫 문항보다 뒤로는 건너뛰지 못하게 막는다
+    let reach = session.keys.findIndex(function (k) { return session.answers[k] === undefined; });
+    if (reach < 0) reach = total - 1;
+    const qmap = '<aside class="qmap" aria-label="답안 표기란"><div class="qmap-h"><span>답안 표기란</span><span>' + doneN + "/" + total + "</span></div>" +
+      '<div class="qmap-grid">' + session.keys.map(function (k, i) {
+        const a = session.answers[k];
+        let c = a === undefined ? "" : (isRight(qv(k, session).q, a) ? "ok" : "bad");
+        if (i === session.pos) c += " cur";
+        return '<button type="button" class="' + c.trim() + '" data-act="jump" data-pos="' + i + '"' + (i > reach ? " disabled" : "") +
+          ' title="' + (i + 1) + "번" + (a === undefined ? "" : c.indexOf("ok") >= 0 ? " · 맞힘" : " · 틀림") + '">' + (i + 1) + "</button>";
+      }).join("") + "</div></aside>";
 
     const showSrc = exam || isMix(session.quizId) || session.mode === "wrong";
     const num = session.pos + 1;
     let html =
       '<div class="qhead"><div><b>' + esc(subjName + " · " + (isMix(session.quizId) ? meta.title : (exam ? "기출 " : meta.week + " ") + meta.title)) + '</b> <span class="badge">' + modeLabel(session.mode) + "</span></div>" +
       "<div>" + num + " / " + total + " · 맞힘 " + correctN + "/" + doneN + "</div></div>" +
-      '<div class="progress"><i style="width:' + (doneN / total * 100) + '%"></i></div>' + dots +
+      '<div class="progress"><i style="width:' + (doneN / total * 100) + '%"></i></div>' +
+      '<div class="qwrap">' + qmap +
       '<div class="card qcard">' +
         (showSrc ? '<div class="qsrc">' + esc((exam ? "기출 " : r.quiz.week + " · ") + r.quiz.title) + " · " + esc(qNumLabel(r)) +
           (q.pf ? ' <span class="badge pf">출제 ' + esc(q.pf) + " 교수님</span>" : "") +
@@ -1050,7 +1066,7 @@
 
     if (exam) html += examStemHTML(r, esc(String(r.q.label || r.q.n)));   // 기출은 시험 문항 번호(복기 안 된 번호는 건너뛴다)
     if (exam && q.notes && q.notes.length) html += '<div class="xnote">' + q.notes.map(function (n) { return "<div>" + fmt(n) + "</div>"; }).join("") + "</div>";
-    if (!exam) html += '<p class="qtext">' + num + ". " + fmt(stemOf(q.q)) + "</p>" + (bogiOf(q.q) ? '<div class="bogi">' + fmt(bogiOf(q.q)) + "</div>" : "");
+    if (!exam) html += '<p class="qtext"><span class="qn">' + num + ".</span> " + fmt(stemOf(q.q)) + "</p>" + (bogiOf(q.q) ? '<div class="bogi">' + fmt(bogiOf(q.q)) + "</div>" : "");
     // 주차별 기출 세트의 문항 그림(원본 시험지에서 잘라 둔 것)
     if (!exam && q.figs && q.figs.length) html += '<div class="figs">' + q.figs.map(function (src) {
       return '<button type="button" class="thumb figimg" data-src="' + esc(src) + '" data-cap="' + esc(num + "번 그림") + '" title="크게 보기">' +
@@ -1094,10 +1110,10 @@
 
     const isLast = session.pos === total - 1;
     const navHTML = '<div class="qnav">' +
-      '<button class="btn" data-act="prev"' + (session.pos === 0 ? " disabled" : "") + ">← 이전</button>" +
+      '<button class="btn" data-act="prev"' + (session.pos === 0 ? " disabled" : "") + ">이전</button>" +
       '<span class="hint">숫자키 1–9로 선택 · Enter/→ 다음</span>' +
       '<button class="btn primary" data-act="next"' + (answered ? "" : " disabled") + ">" +
-        (isLast ? (doneN === total ? "결과 보기" : "끝내기") : "다음 →") + "</button>" +
+        (isLast ? (doneN === total ? "결과 보기" : "끝내기") : "다음") + "</button>" +
       "</div>";
     html += navHTML;
 
@@ -1117,7 +1133,7 @@
 
     // 맨 아래(원래 자리)에도 이전·다음 버튼을 둔다
     if (answered || revealed) html += navHTML;
-    html += "</div>";
+    html += "</div></div>";   // .qcard, .qwrap
 
     setHTML(html);
     // 새 문항을 그린 직후 마우스가 그 자리에 있어 선지가 이미 골라진 것처럼 보이지 않게, 마우스를 움직이기 전까지 hover 표시를 끈다
@@ -1127,18 +1143,16 @@
       const on = function () { opts.classList.remove("nohover"); app.removeEventListener("mousemove", on); };
       app.addEventListener("mousemove", on);
     }
+    const curCell = app.querySelector(".qmap-grid .cur");
+    if (curCell) {
+      const g = curCell.parentNode;
+      if (g.scrollHeight > g.clientHeight) g.scrollTop = curCell.offsetTop - g.clientHeight / 2;
+      if (g.scrollWidth > g.clientWidth) g.scrollLeft = curCell.offsetLeft - g.clientWidth / 2;
+    }
     if (justAnswered) {
       const v = document.getElementById("verdict");
       if (v) v.scrollIntoView({ behavior: "smooth", block: "nearest" });
     }
-  }
-
-  function ringSVG(p) {
-    const r = 48, c = 2 * Math.PI * r;
-    return '<svg class="ring" viewBox="0 0 112 112"><circle cx="56" cy="56" r="' + r + '" fill="none" stroke="var(--surface-2)" stroke-width="10"/>' +
-      '<circle cx="56" cy="56" r="' + r + '" fill="none" stroke="var(--accent)" stroke-width="10" stroke-linecap="round" ' +
-      'stroke-dasharray="' + (c * p / 100).toFixed(1) + " " + c.toFixed(1) + '" transform="rotate(-90 56 56)"/>' +
-      '<text x="56" y="62" text-anchor="middle" font-size="22" font-weight="800" fill="var(--ink)">' + p + "%</text></svg>";
   }
 
   function answerText(r, order, ch) {
@@ -1182,8 +1196,9 @@
       const prev = h.filter(function (a) { return a.quizId === att.quizId && a.mode !== "wrong" && a.ts < att.ts; });
       if (prev.length) {
         const d = p - pct(prev[prev.length - 1]);
-        deltaHTML = '<div class="delta ' + (d > 0 ? "up" : d < 0 ? "down" : "same") + '">지난번 ' + pct(prev[prev.length - 1]) + "% 대비 " + (d > 0 ? "+" + d : d) + "%p</div>";
-      } else deltaHTML = '<div class="delta same">첫 응시 기록</div>';
+        deltaHTML = '<span class="delta ' + (d > 0 ? "up" : d < 0 ? "down" : "same") + '">' + (d > 0 ? "+" + d : d) + "%p</span>" +
+          ' <span class="hint">(지난번 ' + pct(prev[prev.length - 1]) + "%)</span>";
+      } else deltaHTML = '<span class="delta same">첫 응시</span>';
     }
     const wrongN = att.items.filter(function (i) { return !i.correct; }).length;
     const canRetry = !!BY_ID[att.quizId] || isMix(att.quizId);
@@ -1191,15 +1206,18 @@
       "<h1>결과</h1>" +
       '<p class="sub">' + esc(subjName + " · " + (isMix(att.quizId) ? meta.title : meta.week + " " + meta.title)) + " · " + modeLabel(att.mode) + " · " + fmtDate(att.ts) +
         (att.legacy ? ' <span class="legacy">(이전 버전 문항)</span>' : "") + "</p>" +
-      '<div class="card score-hero">' + ringSVG(p) +
-        '<div><div class="big">' + att.score + " / " + att.total + "</div>" + deltaHTML +
-        '<div class="hint">소요 시간 ' + fmtDur(att.durSec) + "</div>" +
+      '<div class="card score-hero"><dl class="score-dl">' +
+        '<div><dt>점수</dt><dd class="big">' + att.score + " / " + att.total + "</dd></div>" +
+        "<div><dt>정답률</dt><dd>" + p + "%</dd></div>" +
+        "<div><dt>소요 시간</dt><dd>" + fmtDur(att.durSec) + "</dd></div>" +
+        (deltaHTML ? "<div><dt>지난번 대비</dt><dd>" + deltaHTML + "</dd></div>" : "") +
+        "</dl>" +
         '<div class="actions">' +
           (!isMix(att.quizId) && wrongN && !att.legacy ? '<button class="btn" data-act="wrong" data-id="' + att.quizId + '">틀린 ' + wrongN + "문제 다시</button>" : "") +
           (canRetry ? '<button class="btn primary" data-act="start" data-id="' + att.quizId + '">' + (isMix(att.quizId) ? "새 랜덤 20문제" : "전체 다시 풀기") + "</button>" : "") +
           '<button class="btn" data-act="history">기록</button>' +
           '<button class="btn" data-act="home">과목 선택</button>' +
-        "</div></div></div>" +
+        "</div></div>" +
       "<h2>문항별 확인</h2>" +
       (att.legacy ? "" : '<p class="sub">틀린 문항은 펼쳐져 있다. 맞힌 문항도 눌러서 해설을 볼 수 있다.</p>') +
       reviewList(att));
@@ -1622,6 +1640,7 @@
     else if (act === "wrong") startQuiz(id, "wrong");
     else if (act === "next") go(1);
     else if (act === "prev") go(-1);
+    else if (act === "jump") jump(+b.dataset.pos);
     else if (act === "submit") submitMulti();
     else if (act === "reveal") revealSelf();
     else if (act === "selfok") gradeSelf(true);
