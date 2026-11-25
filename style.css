@@ -23,8 +23,8 @@
   --shadow: none;
   --radius: 3px;
   /* 글꼴은 app.js의 setupFont가 html 요소의 인라인 스타일로 덮어쓴다(고른 값은 이 브라우저에 기억).
-     --font 전체 화면 / --qfont 문제·해설 글. 기본은 전체 Noto Sans, 문제 맑은 고딕. */
-  --font: "Noto Sans", "Noto Sans KR", -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Segoe UI", sans-serif;
+     --font 전체 화면 / --qfont 문제·해설 글. 기본은 전체 IBM Plex Sans KR(index.html이 웹 글꼴을 받는다), 문제 맑은 고딕. */
+  --font: "IBM Plex Sans KR", -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
   --qfont: "Malgun Gothic", "맑은 고딕", "Apple SD Gothic Neo", -apple-system, "Noto Sans KR", sans-serif;
 }
 /* 다크 모드: 기기 설정을 따르되(자동), 사용자가 고르면 그것을 따른다(html[data-theme]) */
@@ -289,6 +289,48 @@ h3.sec { font-size: 15px; font-weight: 700; margin: 26px 0 8px; display: flex; g
 .qmap-grid button.cur { border: 2px solid var(--accent); color: var(--ink); font-weight: 700; opacity: 1; }
 .qmap-grid button.cur.ok { color: var(--ok); border-color: var(--accent); }
 .qmap-grid button.cur.bad { color: var(--bad); border-color: var(--accent); }
+/* 한 번에 채점: 답한 칸 / PASS로 넘긴 칸(오른쪽 위 P) */
+.qmap-grid button.done { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); color: var(--accent); font-weight: 700; }
+.qmap-grid button.pass { position: relative; border-style: dashed; border-color: var(--ink-3); }
+.qmap-grid button.pass::after { content: "P"; position: absolute; top: 0; right: 2px; font-size: 8.5px; line-height: 1.2; font-weight: 700; color: var(--ink-3); }
+.qmap-grid button.cur.done { color: var(--accent); }
+.qmap-f { padding: 0 8px 8px; }
+.qmap-f .btn { width: 100%; }
+.qnav .btn.pass { color: var(--ink-2); }
+.qsel { margin: 8px 0 0; }
+
+/* 문항 위 출처 줄: 출처 조각마다 출제 교수(2026-11-25) */
+.qsrc .from b { color: var(--ink-2); font-weight: 700; margin-right: 2px; }
+.qsrc .pf, .ra .pf { color: var(--ink-2); }
+.qsrc .pf.none, .ra .pf.none { color: var(--ink-3); }
+.qsrc .pf[title], .ra .pf[title] { text-decoration: underline dotted; text-underline-offset: 2px; cursor: help; }
+.ra.from b { font-weight: 700; margin-right: 2px; }
+
+/* ---------- 시험 개요(시작 전 화면) ---------- */
+.ov-kicker { margin: 0 0 2px; font-size: 12.5px; font-weight: 700; color: var(--accent); }
+.ov-dl { display: grid; grid-template-columns: 112px minmax(0, 1fr); margin: 14px 0 0; border-top: 2px solid var(--ink-2); }
+.ov-dl dt, .ov-dl dd { margin: 0; padding: 9px 12px; border-bottom: 1px solid var(--line); font-size: 14px; }
+.ov-dl dt { background: var(--surface-2); color: var(--ink-2); font-weight: 700; }
+.ov-note { margin-top: 10px; font-size: 13.5px; color: var(--ink-2); }
+.ov-note summary { cursor: pointer; color: var(--ink-2); font-weight: 700; }
+.ov-note p { margin: 6px 0 0; padding: 10px 12px; background: var(--surface-2); line-height: 1.7; }
+.ov-h { font-size: 15px; margin: 22px 0 8px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+.ov-how { margin: 0; padding-left: 20px; font-size: 14px; line-height: 1.75; color: var(--ink-2); }
+.ov-set { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 2px; }
+.ov-opt { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; cursor: pointer; }
+.ov-opt + .ov-opt { border-top: 1px solid var(--line-2); }
+.ov-opt:has(input:checked) { background: var(--accent-soft); }
+.ov-opt input { accent-color: var(--accent); margin: 3px 0 0; width: 15px; height: 15px; flex: none; }
+.ov-opt b { display: block; font-size: 14px; }
+.ov-opt small { display: block; font-size: 12.5px; color: var(--ink-3); margin-top: 1px; }
+.ov-chk { display: flex; flex-wrap: wrap; gap: 18px; align-items: center; margin-top: 10px; font-size: 14px; color: var(--ink-2); }
+.ov-chk label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.ov-chk input { accent-color: var(--accent); width: 15px; height: 15px; margin: 0; }
+.ov-chk input:disabled + * , .ov-chk label:has(input:disabled) { color: var(--ink-3); cursor: default; }
+.ov-resume { margin: 16px 0 0; padding: 9px 12px; font-size: 13.5px; background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line)); }
+.ov-acts { display: flex; align-items: center; gap: 6px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+.ov-acts > span { flex: 1; }
+.ov-acts .btn { min-width: 84px; }
 
 /* 문제·선지·해설과 다시 보기는 '문제 글꼴'(--qfont)로 쓴다. 나머지 화면은 --font */
 .qcard, .review-item { font-family: var(--qfont); }
@@ -342,6 +384,8 @@ h3.sec { font-size: 15px; font-weight: 700; margin: 26px 0 8px; display: flex; g
   .opt:hover:not(:disabled) .num { border-color: var(--ink-3); color: var(--ink-2); }
   .qnav .hint { visibility: hidden; }   /* 키보드 안내는 터치 기기에서 쓸 일이 없다 */
 }
+/* 고른 선지는 마우스가 올라가 있어도 채운 동그라미를 유지한다(번호가 배경색에 묻히지 않게) */
+.opts .opt.sel:hover:not(:disabled) .num { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 
 .actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 14px; }
 .qnav { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 16px 0 4px; padding-top: 14px; border-top: 1px solid var(--line-2); }
@@ -514,6 +558,10 @@ body.locked .topbar { display: none; }
   .quiz-card.group > .wk, .quiz-card.group > :not(.wk) { grid-column: 1; grid-row: auto; }
   .score-dl > div { border-right: 0; border-bottom: 1px solid var(--line-2); }
   .sync-chip { padding: 1px 5px; font-size: 11px; margin-right: 2px; }
+  .ov-dl { grid-template-columns: 84px minmax(0, 1fr); }
+  .ov-dl dt, .ov-dl dd { padding: 8px 9px; font-size: 13.5px; }
+  .ov-acts .btn { min-width: 0; }
+  .qmap-f { padding: 0 6px 6px; }
 }
 @media (max-width: 420px) {
   .navbtn { padding: 2px 6px 0; font-size: 13px; }

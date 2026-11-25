@@ -216,6 +216,20 @@
   }
   function qNumLabel(r) { return isExam(r.quiz) ? (r.q.label || r.q.n) + "번" : (r.idx + 1) + "번"; }
   function isMix(id) { return id.indexOf("MIX:") === 0; }
+  // 발문 앞 〔출처〕(주차별 기출 세트·기출 모음): 데이터에는 그대로 두고(풀던 세션의 문항 지문 fp가 바뀌지 않게) 화면에서만 떼어
+  // 문항 위 작은 출처 줄에 보인다(2026-11-25 사용자 지시: 어디 기출인지·어느 교수 출제인지가 문제 속에 섞여 보이지 않게).
+  // 출처 조각마다 출제 교수(q.srcs, _tools/exset_prof.cjs)를 붙인다. 추정이면 "(추정)", 모르면 "교수 표시 없음"
+  const SRC_TAG = /^〔([^〕]*)〕\s*/;
+  function qStem(q) { return String(q.q || "").replace(SRC_TAG, ""); }
+  function srcLine(q) {
+    if (q.srcs && q.srcs.length) return q.srcs.map(function (s) {
+      return esc(String(s.s).replace(/ — Claude 보완$/, "")) + ' · <span class="pf' + (s.pf ? "" : " none") + '"' +
+        (s.est ? ' title="2025학년도 시험은 교수 표시가 없어 2026 담당 교수님이 냈다고 추정했습니다"' : "") + ">" +
+        (s.pf ? esc(s.pf) + " 교수님" + (s.est ? "(추정)" : "") : "교수 표시 없음") + "</span>";
+    }).join('<span class="eq"> = </span>');
+    const m = String(q.q || "").match(SRC_TAG);
+    return m ? esc(m[1]) : "";
+  }
   // 랜덤 20문제: "MIX:과목"(전체) 또는 "MIX:과목:범위"(과목의 mixRanges — 예: 중간·기말, 2026-11-11)
   function mixRange(id) {
     const p = id.split(":"), s = SUBJ[p[1]];
@@ -224,7 +238,7 @@
   function weekNum(qz) { const m = String(qz.week || "").match(/(\d+)/); return m ? +m[1] : 0; }
   function mixQuizzes(id) {
     const r = mixRange(id);
-    return lectureQuizzes(subjectOf(id)).filter(function (qz) { return !r || (weekNum(qz) >= r.from && weekNum(qz) <= r.to); });
+    return lectureQuizzes(subjectOf(id)).filter(function (qz) { return !qz.exsetOf && (!r || (weekNum(qz) >= r.from && weekNum(qz) <= r.to)); });
   }
   function quizMeta(id) {
     if (isMix(id)) {
@@ -443,7 +457,9 @@
     saveSessions(); Sync.progressDirty();
   }
 
-  function startQuiz(quizId, mode) {
+  // 시험 시작(개요 화면의 '시작'에서 부른다, 2026-11-25). opts.grade: "instant" 문항마다 바로 채점(기본) / "end" 끝까지 풀고 한 번에 채점
+  function startQuiz(quizId, mode, opts) {
+    opts = opts || {};
     let keys;
     if (isMix(quizId)) {
       const all = [];
@@ -467,22 +483,14 @@
       // 기출은 해설이 ①②… 번호로 선지를 가리키고, 조합형은 개수·글자 순으로 정렬해 두었으므로 원래 순서를 지킨다
       orders[k] = orderFor(r, k, n);
     });
-    // 같은 퀴즈를 풀던 기록이 있으면 이어 풀지 묻는다(새로 시작해도 풀던 기록은 목록에 남는다)
-    const ex = sessionList().filter(function (s) {
-      const n = Object.keys(s.answers).length;
-      return s.quizId === quizId && s.mode === mode && n > 0 && n < s.keys.length;
-    })[0];
-    if (ex && confirm("이 퀴즈를 풀던 기록이 있다 (" + Object.keys(ex.answers).length + "/" + ex.keys.length + " 답함)." + NL + NL + "확인 = 이어 풀기" + NL + "취소 = 새로 시작 (풀던 기록은 홈 화면에 남는다)")) {
-      session = ex; renderQuiz(); window.scrollTo({ top: 0 });
-      return;
-    }
+    // 같은 퀴즈를 풀던 기록은 개요 화면이 '이어 풀기'로 보여 준다(새로 시작해도 풀던 기록은 홈 화면에 남는다)
     const fp = {}, variants = {};
     keys.forEach(function (k) {
       fp[k] = fpOf(k);
       if (settings.shuffleOpts) { const v = makeVariant(qByKey(k).q); if (v) variants[k] = v; }
     });
     const now = Date.now();
-    session = { id: "s" + now + Math.random().toString(36).slice(2, 6), quizId: quizId, mode: mode, keys: keys, orders: orders, fp: fp, variants: variants, answers: {}, sel: {}, reveal: {}, pos: 0, start: now, upd: now, chk: now };
+    session = { id: "s" + now + Math.random().toString(36).slice(2, 6), quizId: quizId, mode: mode, keys: keys, orders: orders, fp: fp, variants: variants, answers: {}, sel: {}, reveal: {}, passed: {}, grade: opts.grade === "end" ? "end" : "instant", pos: 0, start: now, upd: now, chk: now };
     persist();
     renderQuiz();
     window.scrollTo({ top: 0 });
@@ -498,30 +506,40 @@
     saveSessions(); Sync.progressDirty();
   }
 
+  // 한 번에 채점(grade "end")이면 제출 전까지 답을 바꿀 수 있다(같은 선지를 다시 누르면 지운다). 여러 개 고르기는 고른 묶음이 곧 답이다
+  function isEnd(s) { s = s || session; return !!s && s.grade === "end"; }
   function choose(displayIdx) {
     const key = session.keys[session.pos];
-    if (session.answers[key] !== undefined) return;
+    const end = isEnd();
+    if (!end && session.answers[key] !== undefined) return;
     const r = qv(key, session);
     const orig = session.orders[key][displayIdx];
     const t = qType(r.q);
+    if (t === "self") return;
+    session.passed = session.passed || {};
     if (t === "multi" || t === "pick") {
       session.sel = session.sel || {};
       const cur = session.sel[key] || [];
       const i = cur.indexOf(orig);
       if (i >= 0) cur.splice(i, 1); else cur.push(orig);
       session.sel[key] = cur;
+      if (end) {
+        if (cur.length) { session.answers[key] = cur.slice().sort(function (a, b) { return a - b; }); delete session.passed[key]; }
+        else delete session.answers[key];
+      }
       persist(); renderQuiz();
       return;
     }
-    if (t === "self") return;
-    session.answers[key] = orig;
-    persist(); renderQuiz(true);
+    if (end && session.answers[key] === orig) delete session.answers[key];
+    else { session.answers[key] = orig; delete session.passed[key]; }
+    persist(); renderQuiz(!end);
   }
   function submitMulti() {
     const key = session.keys[session.pos];
     const cur = (session.sel && session.sel[key]) || [];
     if (!cur.length || session.answers[key] !== undefined) return;
     session.answers[key] = cur.slice().sort(function (a, b) { return a - b; });
+    if (session.passed) delete session.passed[key];
     persist(); renderQuiz(true);
   }
   function revealSelf() {
@@ -534,26 +552,48 @@
     const key = session.keys[session.pos];
     if (session.answers[key] !== undefined) return;
     session.answers[key] = ok ? "ok" : "bad";
+    if (session.passed) delete session.passed[key];
     persist(); renderQuiz();
   }
 
-  function go(delta) {
-    const np = session.pos + delta;
-    if (np < 0) return;
-    if (np >= session.keys.length) return finish();
-    session.pos = np;
-    persist();
-    renderQuiz();
-    window.scrollTo({ top: 0, behavior: "smooth" });
+  // 문항 이동(2026-11-25 PASS): 답하지 않아도 다음 문항으로 넘어갈 수 있다(넘긴 문항은 passed에 적어 답안 표기란에 P로 보인다).
+  // 마지막 문항 다음은 아직 답하지 않은 첫 문항으로 돌아가고, 남은 문항이 없으면 끝내기(채점)로 간다.
+  function unansweredIdx() {
+    return session.keys.map(function (k, i) { return session.answers[k] === undefined ? i : -1; }).filter(function (i) { return i >= 0; });
   }
-
-  // 답안 표기란에서 고른 문항으로 간다(renderQuiz가 아직 닿지 않은 칸은 막아 둔다)
-  function jump(i) {
-    if (!session || i === session.pos || i < 0 || i >= session.keys.length) return;
+  function nextTarget() {
+    if (session.pos < session.keys.length - 1) return session.pos + 1;
+    const u = unansweredIdx().filter(function (i) { return i !== session.pos; });
+    return u.length ? u[0] : null;
+  }
+  function moveTo(i) {
     session.pos = i;
     persist();
     renderQuiz();
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+  function go(delta) {
+    if (delta < 0) { if (session.pos > 0) moveTo(session.pos - 1); return; }
+    const key = session.keys[session.pos];
+    if (session.answers[key] === undefined) { session.passed = session.passed || {}; session.passed[key] = true; }
+    const t = nextTarget();
+    if (t === null) { persist(); return finishAsk(); }
+    moveTo(t);
+  }
+  // 답안 표기란에서 고른 문항으로 간다(어느 칸이든 갈 수 있다)
+  function jump(i) {
+    if (!session || i === session.pos || i < 0 || i >= session.keys.length) return;
+    moveTo(i);
+  }
+  // 끝내기·답안 제출: 답하지 않은 문항이 있거나 한 번에 채점이면 한 번 묻는다. 답하지 않은 문항은 틀린 것으로 센다
+  function finishAsk() {
+    const n = unansweredIdx().length;
+    if (n || isEnd()) {
+      const msg = (n ? "답하지 않은 문항이 " + n + "개 있습니다. 답하지 않은 문항은 틀린 것으로 셉니다." + NL + NL : "") +
+        (isEnd() ? "답안을 제출하고 채점할까요?" : "이대로 끝내고 결과를 볼까요?");
+      if (!confirm(msg)) return;
+    }
+    finish();
   }
 
   function finish() {
@@ -568,6 +608,7 @@
       id: "a" + Date.now() + Math.random().toString(36).slice(2, 6),
       quizId: session.quizId,
       mode: session.mode,
+      grade: session.grade || "instant",
       ts: Date.now(),
       durSec: (Date.now() - session.start) / 1000,
       score: items.filter(function (i) { return i.correct; }).length,
@@ -745,7 +786,7 @@
   const BOGI_LINE = /^(?:[ㄱ-ㅎ]|[가나다라마바사아자차카타파하]|[A-Ha-h]|IV|V|I{1,3})[.)]\s|^\([가나다라마바사아자차카타파하]\)\s/;
   function examStemHTML(r, num) {
     const q = r.q;
-    const lines = String(q.q).split(NL);
+    const lines = qStem(q).split(NL);
     let out = "", first = true, para = [], figShown = false, box = [];
     function flush() {
       if (!para.length) return;
@@ -839,14 +880,23 @@
   function weekGroupCard(list, exam) {
     const first = list[0];
     const base = exam ? first.title.replace(/ \(Claude 보완\)$/, "") : first.title.replace(/ (?:\d+회|기출)$/, "");
+    // 이번 교수만 세트는 다른 교수 포함 세트 바로 앞에 둔다
+    list = list.slice().sort(function (a, b) {
+      const ka = a.exsetOf ? 1 : a.exset ? 2 : 0, kb = b.exsetOf ? 1 : b.exset ? 2 : 0;
+      return ka - kb;
+    });
     const rows = list.map(function (meta) {
       const fa = fullAttempts(meta.id);
       const last = lastAttempt(meta.id);
       const best = fa.reduce(function (m, a) { return Math.max(m, pct(a)); }, 0);
       const wrongN = last ? last.items.filter(function (i) { return !i.correct; }).length : 0;
-      const m = meta.title.match(/(\d+회|기출)$/) || meta.title.match(/\((CBT 반영(?: \d+회)?)\)$/);   // "… 기출": 주차별 기출 세트(2026-11-10)   // "… (CBT 반영)"·"… (CBT 반영 2회)" 세트(2026-10-27, 회차 2026-11-03)
+      const m = meta.title.match(/(\d+회|기출)$/) || meta.title.match(/\((CBT 반영(?: \d+회)?)\)$/);
+      // 주차별 기출 세트(2026-11-25): 이번 주차 교수만 / 다른 교수 포함 / 모두 이번 교수
+      const pn = String(meta.prof || "").split(/\s*·\s*/).filter(Boolean).join("·");
+      const exLab = !meta.exset ? null : meta.exScope === "prof" ? "기출 · " + pn + " 교수님" : meta.exScope === "all" && list.some(function (x) { return x.exsetOf === meta.id; }) ? "기출 · 다른 교수 포함" :
+        meta.exScope === "allmine" ? "기출 · " + pn + " 교수님" : "기출";   // "… 기출": 주차별 기출 세트(2026-11-10)   // "… (CBT 반영)"·"… (CBT 반영 2회)" 세트(2026-10-27, 회차 2026-11-03)
       return '<div class="round">' +
-        '<div class="round-info"><b>' + esc(exam ? meta.ver || meta.title : m ? m[1] : "연습 문제") + "</b>" +
+        '<div class="round-info"><b>' + esc(exam ? meta.ver || meta.title : exLab || (m ? m[1] : "연습 문제")) + "</b>" +
           '<span class="meta"><span>' + meta.questions.length + "문항</span>" +
           (fa.length ? "<span>응시 <b>" + fa.length + "</b>회</span><span>최근 <b>" + pct(fa[fa.length - 1]) + "%</b></span><span>최고 <b>" + best + "%</b></span>" : "<span>응시 기록 없음</span>") +
           "</span>" + (fa.length ? sparkSVG(fa.map(pct)) : "") + "</div>" +
@@ -963,10 +1013,7 @@
         '<button class="btn small primary" data-act="resume" data-id="' + s.id + '">이어 풀기</button></div></div>';
     });
 
-    if (!locked) html += '<div class="card settings">' +
-      '<label><input type="checkbox" id="setOpts"' + (settings.shuffleOpts ? " checked" : "") + "> 선지 순서 섞기</label>" +
-      '<label><input type="checkbox" id="setQs"' + (settings.shuffleQs ? " checked" : "") + "> 문제 순서 섞기</label>" +
-      '<span class="hint">기출은 섞이지 않습니다.</span></div>';
+    // 선지·문제 섞기와 채점 방식은 시험 개요 화면에서 고른다(2026-11-25)
 
     if (subj) {
       const lq = lectureQuizzes(subj.id), eq = examQuizzes(subj.id);
@@ -1012,9 +1059,114 @@
 
     setHTML(html);
     if (locked) return;
+    document.getElementById("importFile").onchange = importHistory;
+  }
+
+  // ---------- 시험 개요(2026-11-25 사용자 지시) ----------
+  // 목록의 '시작'·'틀린 N문제'·결과 화면의 '다시 풀기'는 바로 시작하지 않고 이 화면을 먼저 보인다.
+  // 문항 구성·출처·출제·응시 기록·풀이 방법을 설명하고, 채점 방식(바로 채점 / 한 번에 채점)과 섞기를 고른 뒤 '시작'.
+  // 같은 퀴즈를 풀던 기록이 있으면 '이어 풀기'와 '새로 시작'을 함께 보인다(예전의 확인 창을 대신한다).
+  let ovCtx = null;
+  function srcSummary(qs) {
+    const seen = [], add = function (x) { if (x && seen.indexOf(x) < 0) seen.push(x); };
+    qs.forEach(function (q) {
+      String(q.src || (String(q.q || "").match(SRC_TAG) || [])[1] || "").split(/\s*[=≈]\s*/).forEach(function (seg) {
+        const m = seg.match(/^(20\d\d (?:중간|기말)|20\d\d 인터넷문제|기출문제집|★ (?:중간|기말) 정리)/);
+        if (m) add(m[1].replace(/^★ /, ""));
+      });
+    });
+    return seen.sort(function (a, b) {
+      const ya = +(a.match(/20\d\d/) || [0])[0], yb = +(b.match(/20\d\d/) || [0])[0];
+      return yb - ya || (a < b ? -1 : 1);
+    });
+  }
+  function renderOverview(quizId, mode) {
+    const mix = isMix(quizId);
+    if (!mix && !BY_ID[quizId]) return renderHome();
+    setNav("");
+    const qz = BY_ID[quizId], meta = quizMeta(quizId);
+    const subjName = SUBJ[subjectOf(quizId)] ? SUBJ[subjectOf(quizId)].name : "";
+    const exam = !mix && isExam(qz);
+    let qs, n;
+    if (mix) { qs = []; mixQuizzes(quizId).forEach(function (z) { qs = qs.concat(z.questions); }); n = Math.min(20, qs.length); }
+    else if (mode === "wrong") {
+      const last = lastAttempt(quizId);
+      qs = last ? last.items.filter(function (it) { return !it.correct && qByKey(it.key); }).map(function (it) { return qByKey(it.key).q; }) : [];
+      if (!qs.length) return renderHome();
+      n = qs.length;
+    } else { qs = qz.questions; n = qs.length; }
+    ovCtx = { quizId: quizId, mode: mix ? "mix" : mode === "wrong" ? "wrong" : "full" };
+
+    const cnt = { mc: 0, multi: 0, pick: 0, self: 0 };
+    qs.forEach(function (q) { cnt[qType(q)] = (cnt[qType(q)] || 0) + 1; });
+    const kinds = [["mc", "한 개 고르기"], ["multi", "여러 개 고르기"], ["pick", "모두 고르기"], ["self", "스스로 채점"]]
+      .filter(function (k) { return cnt[k[0]]; }).map(function (k) { return k[1] + " " + cnt[k[0]]; });
+    const fa = fullAttempts(quizId);
+    const best = fa.reduce(function (m, a) { return Math.max(m, pct(a)); }, 0);
+    const srcs = mix ? [] : srcSummary(qs);
+    const ex = sessionList().filter(function (s) {
+      const k = Object.keys(s.answers).length;
+      return s.quizId === quizId && s.mode === ovCtx.mode && k > 0 && k < s.keys.length;
+    })[0];
+
+    const rows = [];
+    rows.push(["문항", (mix ? "범위 안에서 무작위 " + n : mode === "wrong" ? "지난번에 틀린 " + n : n) + "문항" + (mix ? "" : " (" + kinds.join(" · ") + ")")]);
+    if (!mix && qz.prof) rows.push(["강의", esc(qz.week + " · " + qz.prof + " 교수님")]);
+    if (!mix && qz.exset) {
+      const pn = String(qz.prof || "").split(/\s*·\s*/).filter(Boolean).join("·");
+      rows.push(["출제", qz.exScope === "prof" ? "2026 담당 " + esc(pn) + " 교수님이 낸 문항만" :
+        qz.exScope === "allmine" ? "모두 2026 담당 " + esc(pn) + " 교수님 출제" :
+        qz.exScope === "all" ? "다른 교수님 출제 문항까지 모두(문항마다 출처 옆에 출제 교수 표시)" : "교수별로 나누지 않음"]);
+    }
+    if (srcs.length) rows.push(["출처", esc(srcs.join(" · "))]);
+    rows.push(["시간", "제한 없음 · 걸린 시간은 결과에 남습니다"]);
+    rows.push(["응시 기록", fa.length ? "응시 " + fa.length + "회 · 최근 " + pct(fa[fa.length - 1]) + "% · 최고 " + best + "%" : "처음 응시"]);
+
+    const g = settings.gradeMode === "end" ? "end" : "instant";
+    const noShuffle = exam;   // 기출 시험은 해설이 ①② 번호를 가리켜 섞지 않는다
+    const how = [
+      "답안 표기란의 번호를 누르면 어느 문항으로든 갈 수 있습니다.",
+      "모르는 문항은 <b>PASS</b>로 넘기고 나중에 돌아와 풀 수 있습니다. 넘긴 문항은 답안 표기란에 P로 표시됩니다.",
+      "마지막 문항 다음에는 아직 답하지 않은 문항으로 돌아갑니다. 답안 표기란 아래 단추로 언제든 끝낼 수 있고, 답하지 않은 문항은 틀린 것으로 셉니다."
+    ];
+    if (cnt.self) how.push("스스로 채점 문항은 채점 방식과 관계없이 해설을 본 뒤 바로 스스로 채점합니다.");
+
+    let html = '<p class="ov-kicker">시험 개요</p>' +
+      "<h1>" + esc(mix ? subjName + " " + meta.title : (exam ? "" : meta.week + " ") + meta.title) + "</h1>" +
+      '<p class="sub">' + esc(subjName) + (mix ? "" : " · " + esc(qz.grade + " " + qz.term)) + " · " + modeLabel(ovCtx.mode) + "</p>" +
+      '<dl class="ov-dl">' + rows.map(function (r) { return "<dt>" + r[0] + "</dt><dd>" + r[1] + "</dd>"; }).join("") + "</dl>" +
+      (!mix && qz.note ? '<details class="ov-note"><summary>세트 설명</summary><p>' + esc(qz.note) + "</p></details>" : "") +
+      '<h2 class="ov-h">풀이 방법</h2><ul class="ov-how">' + how.map(function (h) { return "<li>" + h + "</li>"; }).join("") + "</ul>" +
+      '<h2 class="ov-h">설정</h2>' +
+      '<div class="ov-set" role="radiogroup" aria-label="채점 방식">' +
+        '<label class="ov-opt"><input type="radio" name="ovGrade" value="instant"' + (g === "instant" ? " checked" : "") + ">" +
+          "<span><b>문항마다 바로 채점</b><small>답을 고르면 바로 정답과 해설이 나옵니다.</small></span></label>" +
+        '<label class="ov-opt"><input type="radio" name="ovGrade" value="end"' + (g === "end" ? " checked" : "") + ">" +
+          "<span><b>끝까지 풀고 한 번에 채점</b><small>답안을 제출할 때까지 정답을 보이지 않고, 그 전에는 답을 바꿀 수 있습니다.</small></span></label>" +
+      "</div>" +
+      '<div class="ov-chk">' +
+        '<label><input type="checkbox" id="setOpts"' + (settings.shuffleOpts ? " checked" : "") + (noShuffle ? " disabled" : "") + "> 선지 순서 섞기</label>" +
+        '<label><input type="checkbox" id="setQs"' + (settings.shuffleQs ? " checked" : "") + (noShuffle || mix ? " disabled" : "") + "> 문제 순서 섞기</label>" +
+        (noShuffle ? '<span class="hint">기출 시험은 섞지 않습니다.</span>' : mix ? '<span class="hint">랜덤 문제는 늘 섞입니다.</span>' : "") +
+      "</div>" +
+      (ex ? '<p class="ov-resume">풀던 기록이 있습니다: ' + Object.keys(ex.answers).length + "/" + ex.keys.length + " 답함 · " +
+        (isEnd(ex) ? "한 번에 채점" : "바로 채점") + (ex.upd ? " · " + fmtDate(ex.upd) + " 마지막" : "") + ". 이어 풀면 그때 고른 채점 방식을 따릅니다.</p>" : "") +
+      '<div class="ov-acts"><button class="btn" data-act="home">목록으로</button><span></span>' +
+        (ex ? '<button class="btn" data-act="begin">새로 시작</button><button class="btn primary" data-act="continue" data-id="' + ex.id + '">이어 풀기</button>'
+          : '<button class="btn primary" data-act="begin">시작</button>') +
+      "</div>";
+    setHTML(html);
     document.getElementById("setOpts").onchange = function (e) { settings.shuffleOpts = e.target.checked; saveSettings(); };
     document.getElementById("setQs").onchange = function (e) { settings.shuffleQs = e.target.checked; saveSettings(); };
-    document.getElementById("importFile").onchange = importHistory;
+    Array.prototype.forEach.call(document.querySelectorAll('input[name="ovGrade"]'), function (el) {
+      el.onchange = function () { settings.gradeMode = el.value; saveSettings(); };
+    });
+    window.scrollTo({ top: 0 });
+  }
+  function beginFromOverview() {
+    if (!ovCtx) return renderHome();
+    const el = document.querySelector('input[name="ovGrade"]:checked');
+    startQuiz(ovCtx.quizId, ovCtx.mode, { grade: el ? el.value : "instant" });
   }
 
   function renderQuiz(justAnswered) {
@@ -1028,36 +1180,43 @@
     const order = session.orders[key];
     const chosen = session.answers[key];
     const answered = chosen !== undefined;
+    const end = isEnd();
+    const graded = answered && !end;           // 정답·해설을 보이는가(한 번에 채점이면 제출 전까지 숨긴다)
     const revealed = t === "self" && session.reveal && session.reveal[key];
     const sel = (session.sel && session.sel[key]) || [];
+    const passed = session.passed || {};
     const meta = quizMeta(session.quizId);
     const subjName = SUBJ[subjectOf(session.quizId)] ? SUBJ[subjectOf(session.quizId)].name : "";
     const total = session.keys.length;
     const doneN = Object.keys(session.answers).length;
     const correctN = session.keys.filter(function (k) { return session.answers[k] !== undefined && isRight(qv(k, session).q, session.answers[k]); }).length;
 
-    // 답안 표기란(2026-11-25 화면 개편): 번호 칸을 눌러 그 문항으로 간다.
-    // '다음'은 답해야 눌리므로, 아직 답하지 않은 첫 문항보다 뒤로는 건너뛰지 못하게 막는다
-    let reach = session.keys.findIndex(function (k) { return session.answers[k] === undefined; });
-    if (reach < 0) reach = total - 1;
+    // 답안 표기란(2026-11-25): 번호 칸을 눌러 어느 문항으로든 간다. 바로 채점이면 맞힘·틀림 색, 한 번에 채점이면 답한 칸만 표시.
+    // 넘긴(PASS) 문항은 P 표시. 아래 '끝내고 결과 보기/답안 제출'로 언제든 채점한다
     const qmap = '<aside class="qmap" aria-label="답안 표기란"><div class="qmap-h"><span>답안 표기란</span><span>' + doneN + "/" + total + "</span></div>" +
       '<div class="qmap-grid">' + session.keys.map(function (k, i) {
         const a = session.answers[k];
-        let c = a === undefined ? "" : (isRight(qv(k, session).q, a) ? "ok" : "bad");
-        if (i === session.pos) c += " cur";
-        return '<button type="button" class="' + c.trim() + '" data-act="jump" data-pos="' + i + '"' + (i > reach ? " disabled" : "") +
-          ' title="' + (i + 1) + "번" + (a === undefined ? "" : c.indexOf("ok") >= 0 ? " · 맞힘" : " · 틀림") + '">' + (i + 1) + "</button>";
-      }).join("") + "</div></aside>";
+        const st = a === undefined ? (passed[k] ? "pass" : "") : end ? "done" : (isRight(qv(k, session).q, a) ? "ok" : "bad");
+        const c = st + (i === session.pos ? " cur" : "");
+        const tip = a === undefined ? (passed[k] ? " · 넘김(PASS)" : "") : end ? " · 답함" : st === "ok" ? " · 맞힘" : " · 틀림";
+        return '<button type="button" class="' + c.trim() + '" data-act="jump" data-pos="' + i + '" title="' + (i + 1) + "번" + tip + '">' + (i + 1) + "</button>";
+      }).join("") + "</div>" +
+      '<div class="qmap-f"><button type="button" class="btn small' + (end ? " primary" : "") + '" data-act="finish">' + (end ? "답안 제출" : "끝내고 결과 보기") + "</button></div></aside>";
 
-    const showSrc = exam || isMix(session.quizId) || session.mode === "wrong";
+    const mixOrWrong = isMix(session.quizId) || session.mode === "wrong";
+    const from = srcLine(q);
+    const showSrc = exam || mixOrWrong || !!from;
     const num = session.pos + 1;
     let html =
-      '<div class="qhead"><div><b>' + esc(subjName + " · " + (isMix(session.quizId) ? meta.title : (exam ? "기출 " : meta.week + " ") + meta.title)) + '</b> <span class="badge">' + modeLabel(session.mode) + "</span></div>" +
-      "<div>" + num + " / " + total + " · 맞힘 " + correctN + "/" + doneN + "</div></div>" +
+      '<div class="qhead"><div><b>' + esc(subjName + " · " + (isMix(session.quizId) ? meta.title : (exam ? "기출 " : meta.week + " ") + meta.title)) + '</b> <span class="badge">' + modeLabel(session.mode) + "</span>" +
+        ' <span class="badge">' + (end ? "한 번에 채점" : "바로 채점") + "</span></div>" +
+      "<div>" + num + " / " + total + " · " + (end ? "답함 " + doneN + "/" + total : "맞힘 " + correctN + "/" + doneN) + "</div></div>" +
       '<div class="progress"><i style="width:' + (doneN / total * 100) + '%"></i></div>' +
       '<div class="qwrap">' + qmap +
       '<div class="card qcard">' +
-        (showSrc ? '<div class="qsrc">' + esc((exam ? "기출 " : r.quiz.week + " · ") + r.quiz.title) + " · " + esc(qNumLabel(r)) +
+        (showSrc ? '<div class="qsrc">' +
+          (exam || mixOrWrong ? "<span>" + esc((exam ? "기출 " : r.quiz.week + " · ") + r.quiz.title) + " · " + esc(qNumLabel(r)) + "</span>" : "") +
+          (from ? '<span class="from"><b>출처</b> ' + from + "</span>" : "") +
           (q.pf ? ' <span class="badge pf">출제 ' + esc(q.pf) + " 교수님</span>" : "") +
           (q.alt ? ' <span class="badge alt">Claude 보완</span>' : "") +
           (t === "multi" ? ' <span class="badge">' + answerSet(q).length + "개 고르기</span>" : "") +
@@ -1066,7 +1225,7 @@
 
     if (exam) html += examStemHTML(r, esc(String(r.q.label || r.q.n)));   // 기출은 시험 문항 번호(복기 안 된 번호는 건너뛴다)
     if (exam && q.notes && q.notes.length) html += '<div class="xnote">' + q.notes.map(function (n) { return "<div>" + fmt(n) + "</div>"; }).join("") + "</div>";
-    if (!exam) html += '<p class="qtext"><span class="qn">' + num + ".</span> " + fmt(stemOf(q.q)) + "</p>" + (bogiOf(q.q) ? '<div class="bogi">' + fmt(bogiOf(q.q)) + "</div>" : "");
+    if (!exam) html += '<p class="qtext"><span class="qn">' + num + ".</span> " + fmt(stemOf(qStem(q))) + "</p>" + (bogiOf(qStem(q)) ? '<div class="bogi">' + fmt(bogiOf(qStem(q))) + "</div>" : "");
     // 주차별 기출 세트의 문항 그림(원본 시험지에서 잘라 둔 것)
     if (!exam && q.figs && q.figs.length) html += '<div class="figs">' + q.figs.map(function (src) {
       return '<button type="button" class="thumb figimg" data-src="' + esc(src) + '" data-cap="' + esc(num + "번 그림") + '" title="크게 보기">' +
@@ -1079,7 +1238,7 @@
       const chosenArr = Array.isArray(chosen) ? chosen : (typeof chosen === "number" ? [chosen] : []);
       html += '<div class="opts">' + order.map(function (orig, di) {
         let cls = "opt", tag = "";
-        const shown = answered || revealed;
+        const shown = graded || revealed;
         if (t === "self") {
           cls += " static";
         } else if (shown) {
@@ -1088,36 +1247,43 @@
           else cls += " dim";
         } else if ((t === "multi" || t === "pick") && sel.indexOf(orig) >= 0) {
           cls += " sel"; tag = "선택";
+        } else if (end && chosenArr.indexOf(orig) >= 0) {
+          cls += " sel"; tag = "선택";
         }
-        const disabled = answered || t === "self";
+        const disabled = graded || t === "self";
         return '<button type="button" class="' + cls + '" data-opt="' + di + '"' + (disabled ? " disabled" : "") + ">" +
           '<span class="num">' + (t === "pick" ? PICKLAB[di] : di + 1) + '</span><span class="otext">' + fmt(q.o[orig]) + "</span>" +
           (tag ? '<span class="tag">' + tag + "</span>" : "") + "</button>";
       }).join("") + "</div>";
     }
 
-    if (t === "multi" && !answered) {
+    if (!end && t === "multi" && !answered) {
       html += '<div class="actions"><button class="btn primary" data-act="submit"' + (sel.length ? "" : " disabled") + ">" +
         "제출 (" + sel.length + "/" + answerSet(q).length + "개 선택)</button></div>";
     }
-    if (t === "pick" && !answered) {   // 정답 개수는 보이지 않는다
+    if (!end && t === "pick" && !answered) {   // 정답 개수는 보이지 않는다
       html += '<div class="actions"><button class="btn primary" data-act="submit"' + (sel.length ? "" : " disabled") + ">" +
         "제출 (" + sel.length + "개 선택)</button></div>";
+    }
+    if (end && (t === "multi" || t === "pick")) {
+      html += '<p class="hint qsel">' + (t === "multi" ? sel.length + "/" + answerSet(q).length + "개 선택" : sel.length + "개 선택") + " · 고른 것이 그대로 답안이 됩니다</p>";
     }
     if (t === "self" && !revealed) {
       html += '<div class="actions"><button class="btn primary" data-act="reveal">답을 생각한 뒤 해설 보기</button></div>';
     }
 
-    const isLast = session.pos === total - 1;
+    // 오른쪽 단추: 답했으면 '다음', 아니면 'PASS'. 갈 곳이 없으면(마지막이고 남은 문항 없음) 결과 보기 / 답안 제출
+    const target = nextTarget();
+    const rightLabel = target === null ? (end ? "답안 제출" : answered ? "결과 보기" : "끝내기") : answered ? "다음" : "PASS";
+    const rightPrimary = answered || target === null;
     const navHTML = '<div class="qnav">' +
       '<button class="btn" data-act="prev"' + (session.pos === 0 ? " disabled" : "") + ">이전</button>" +
-      '<span class="hint">숫자키 1–9로 선택 · Enter/→ 다음</span>' +
-      '<button class="btn primary" data-act="next"' + (answered ? "" : " disabled") + ">" +
-        (isLast ? (doneN === total ? "결과 보기" : "끝내기") : "다음") + "</button>" +
+      '<span class="hint">숫자키 1–9로 선택 · Enter/→ ' + (answered ? "다음" : "PASS") + "</span>" +
+      '<button class="btn' + (rightPrimary ? " primary" : " pass") + '" data-act="next">' + rightLabel + "</button>" +
       "</div>";
     html += navHTML;
 
-    if (answered && t !== "self") {
+    if (graded && t !== "self") {
       const ok = isRight(q, chosen);
       const right = answerSet(q).slice().sort(function (a, b) { return order.indexOf(a) - order.indexOf(b); }).map(function (o) { return optLab(q, order.indexOf(o)); }).join(", ");
       html += '<div class="verdict ' + (ok ? "ok" : "bad") + '" id="verdict">' +
@@ -1131,8 +1297,8 @@
         : '<div class="selfgrade"><span>내 답은?</span><button class="btn" data-act="selfok">맞혔다</button><button class="btn" data-act="selfbad">틀렸다·모르겠다</button></div>';
     }
 
-    // 맨 아래(원래 자리)에도 이전·다음 버튼을 둔다
-    if (answered || revealed) html += navHTML;
+    // 해설이 보이면 맨 아래(원래 자리)에도 이전·다음 버튼을 둔다
+    if (graded || revealed) html += navHTML;
     html += "</div></div>";   // .qcard, .qwrap
 
     setHTML(html);
@@ -1174,7 +1340,8 @@
       const rightTxt = exam || qType(r.q) === "self" ? fmt(r.q.h || "") : answerText(r, order, r.q.a);
       return '<details class="card review-item"' + (it.correct ? "" : " open") + ">" +
         '<summary><span class="mark ' + (it.correct ? "ok" : "bad") + '">' + (it.correct ? "○" : "✕") + "</span>" +
-          '<div><div class="rq">' + (i + 1) + ". " + fmt(stemOf(String(r.q.q).replace("[공통 지문] ", ""))) + "</div>" +
+          '<div><div class="rq">' + (i + 1) + ". " + fmt(stemOf(qStem(r.q).replace("[공통 지문] ", ""))) + "</div>" +
+          (srcLine(r.q) ? '<div class="ra from"><b>출처</b> ' + srcLine(r.q) + "</div>" : "") +
           '<div class="ra">' + (exam || isMix(att.quizId) || att.mode === "wrong" ? esc(qNumLabel(r)) + " · " : "") +
             "내 답 " + (stale ? "(문항이 개정되어 예전 선택을 표시하지 못함)" : answerText(r, order, it.chosen)) +
             (it.correct ? "" : " · 정답 " + rightTxt) + "</div></div></summary>" +
@@ -1289,26 +1456,28 @@
   setupTheme();
 
   // ---------- 글꼴 ----------
-  // 전체 화면(--font)과 문제·해설(--qfont)을 따로 고른다. 기본은 전체 Noto Sans, 문제 맑은 고딕.
-  // 고른 값은 이 브라우저에 기억하고(mq_font), index.html 머리의 짧은 스크립트가 처음부터 입힌다.
+  // 전체 화면(--font)과 문제·해설(--qfont)을 따로 고른다. 기본은 전체 IBM Plex Sans KR, 문제 맑은 고딕(2026-11-25 사용자 지시).
+  // 사용자가 직접 고른 값만 이 브라우저에 기억하고(mq_font, user: true), index.html 머리의 짧은 스크립트가 처음부터 입힌다.
+  // 고른 적이 없으면 기본값을 따르므로 기본값을 바꾸면 모두에게 바로 적용된다(예전 판이 자동으로 적어 둔 값은 user가 없어 무시).
   // 컴퓨터에 없는 글꼴은 웹 글꼴을 그때 받아 온다(url). 받아 오는 동안에는 뒤쪽 글꼴로 보인다.
   const GF = "https://fonts.googleapis.com/css2?family=";
   const FONTS = [
+    { id: "plex", name: "IBM Plex Sans KR", css: '"IBM Plex Sans KR",-apple-system,"Segoe UI","Apple SD Gothic Neo","Malgun Gothic",sans-serif', url: GF + "IBM+Plex+Sans+KR:wght@400;500;700&display=swap" },
     { id: "noto", name: "Noto Sans", css: '"Noto Sans","Noto Sans KR",-apple-system,"Segoe UI",sans-serif', url: GF + "Noto+Sans:wght@400;500;700&family=Noto+Sans+KR:wght@400;500;700&display=swap" },
     { id: "malgun", name: "맑은 고딕", css: '"Malgun Gothic","맑은 고딕","Apple SD Gothic Neo",-apple-system,sans-serif' },
     { id: "system", name: "시스템 기본", css: '-apple-system,BlinkMacSystemFont,"Segoe UI","Apple SD Gothic Neo","Malgun Gothic",sans-serif' },
     { id: "pretendard", name: "Pretendard", css: '"Pretendard Variable",Pretendard,sans-serif', url: "https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" },
     { id: "nanum", name: "나눔고딕", css: '"Nanum Gothic",NanumGothic,sans-serif', url: GF + "Nanum+Gothic:wght@400;700&display=swap" },
     { id: "gothica1", name: "Gothic A1", css: '"Gothic A1",sans-serif', url: GF + "Gothic+A1:wght@400;500;700&display=swap" },
-    { id: "plex", name: "IBM Plex Sans KR", css: '"IBM Plex Sans KR",sans-serif', url: GF + "IBM+Plex+Sans+KR:wght@400;500;700&display=swap" },
     { id: "notokr", name: "Noto Sans KR", css: '"Noto Sans KR",sans-serif', url: GF + "Noto+Sans+KR:wght@400;500;700&display=swap" }
   ];
-  const FONT_DEF = { ui: "noto", q: "malgun" };
+  const FONT_DEF = { ui: "plex", q: "malgun" };
   function fontById(id, fb) {
     return FONTS.find(function (f) { return f.id === id; }) ||
       FONTS.find(function (f) { return f.id === fb; }) || FONTS[0];
   }
-  let fontPref = Object.assign({}, FONT_DEF, load("mq_font", {}));
+  const fontSaved = load("mq_font", null);
+  let fontPref = Object.assign({}, FONT_DEF, fontSaved && fontSaved.user ? { ui: fontSaved.ui, q: fontSaved.q } : {});
   function ensureWebFont(list) {
     const want = list.map(function (f) { return f.url; }).filter(Boolean);
     Array.prototype.forEach.call(document.querySelectorAll("link[data-mqfont]"), function (l) {
@@ -1321,13 +1490,14 @@
       document.head.appendChild(l);
     });
   }
-  function applyFonts() {
+  function applyFonts(byUser) {
     const ui = fontById(fontPref.ui, FONT_DEF.ui), q = fontById(fontPref.q, FONT_DEF.q);
     const r = document.documentElement;
     r.style.setProperty("--font", ui.css);
     r.style.setProperty("--qfont", q.css);
     ensureWebFont([ui, q]);
-    save("mq_font", { ui: ui.id, q: q.id, uiCss: ui.css, qCss: q.css, uiUrl: ui.url || null, qUrl: q.url || null });
+    if (byUser === "reset") remove("mq_font");
+    else if (byUser) save("mq_font", { user: true, ui: ui.id, q: q.id, uiCss: ui.css, qCss: q.css, uiUrl: ui.url || null, qUrl: q.url || null });
   }
   function setupFont() {
     const nav = document.querySelector(".topnav");
@@ -1350,9 +1520,9 @@
         '<span class="s2" style="display:block"><em>문제</em>다음 중 옳은 것은? ①②③ ABC</span></p>' +
         '<div class="fp-foot"><button type="button" class="btn small" id="fpReset">기본값</button>' +
         '<button type="button" class="btn small primary" id="fpClose">닫기</button></div>';
-      pop.querySelector("#fpUi").onchange = function (e) { fontPref.ui = e.target.value; applyFonts(); };
-      pop.querySelector("#fpQ").onchange = function (e) { fontPref.q = e.target.value; applyFonts(); };
-      pop.querySelector("#fpReset").onclick = function () { fontPref = Object.assign({}, FONT_DEF); applyFonts(); paint(); };
+      pop.querySelector("#fpUi").onchange = function (e) { fontPref.ui = e.target.value; applyFonts(true); };
+      pop.querySelector("#fpQ").onchange = function (e) { fontPref.q = e.target.value; applyFonts(true); };
+      pop.querySelector("#fpReset").onclick = function () { fontPref = Object.assign({}, FONT_DEF); applyFonts("reset"); paint(); };
       pop.querySelector("#fpClose").onclick = function () { close(); };
     };
     const place = function () {
@@ -1510,7 +1680,7 @@
         if (weak.length) {
           html += '<div class="weak"><div class="hint">자주 틀린 문항</div>' + weak.map(function (w) {
             const r = qByKey(w.key);
-            return "<div><b>" + w.s.wrong + "/" + w.s.seen + "</b> · " + esc(qNumLabel(r)) + " " + fmt(stemOf(String(r.q.q).replace("[공통 지문] ", ""))) + "</div>";
+            return "<div><b>" + w.s.wrong + "/" + w.s.seen + "</b> · " + esc(qNumLabel(r)) + " " + fmt(stemOf(qStem(r.q).replace("[공통 지문] ", ""))) + "</div>";
           }).join("") + "</div>";
         }
       }
@@ -1724,10 +1894,16 @@
     const act = b.dataset.act, id = b.dataset.id;
     if (window.QUIZ_LOCKED && act !== "home") return askLogin();
     if (act === "admin") return renderAdmin(b.dataset.tab);
-    if (act === "start") startQuiz(id, "full");
+    if (act === "start") renderOverview(id, "full");
     else if (act === "print") { if (window.QuizPrint) window.QuizPrint.open(id); }
     else if (act === "doc") downloadDoc(id, b);
-    else if (act === "wrong") startQuiz(id, "wrong");
+    else if (act === "wrong") renderOverview(id, "wrong");
+    else if (act === "begin") beginFromOverview();
+    else if (act === "continue" || act === "resume") {
+      const rs = sessionList().filter(function (x) { return x.id === id; })[0];
+      if (rs) { session = rs; renderQuiz(); window.scrollTo({ top: 0 }); } else renderHome();
+    }
+    else if (act === "finish") finishAsk();
     else if (act === "next") go(1);
     else if (act === "prev") go(-1);
     else if (act === "jump") jump(+b.dataset.pos);
@@ -1735,10 +1911,6 @@
     else if (act === "reveal") revealSelf();
     else if (act === "selfok") gradeSelf(true);
     else if (act === "selfbad") gradeSelf(false);
-    else if (act === "resume") {
-      const rs = sessionList().filter(function (x) { return x.id === id; })[0];
-      if (rs) { session = rs; renderQuiz(); window.scrollTo({ top: 0 }); } else renderHome();
-    }
     else if (act === "discard") {
       if (confirm("응시를 취소하시겠습니까? (되돌릴 수 없음)")) {
         dropSession(id);
@@ -1788,14 +1960,15 @@
     const r = qByKey(key);
     const t = qType(r.q);
     const answered = session.answers[key] !== undefined;
-    if (/^[1-9]$/.test(e.key) && !answered && t !== "self") {
+    const end = isEnd();
+    if (/^[1-9]$/.test(e.key) && (end || !answered) && t !== "self") {
       const n = +e.key - 1;
       if (n < session.orders[key].length) { e.preventDefault(); choose(n); }
-    } else if (e.key === "Enter" && !answered && (t === "multi" || t === "pick")) {
+    } else if (e.key === "Enter" && !end && !answered && (t === "multi" || t === "pick")) {
       e.preventDefault(); submitMulti();
     } else if (e.key === "Enter" && !answered && t === "self" && !(session.reveal && session.reveal[key])) {
       e.preventDefault(); revealSelf();
-    } else if ((e.key === "Enter" || e.key === "ArrowRight") && answered) {
+    } else if ((e.key === "Enter" && answered) || e.key === "ArrowRight") {
       e.preventDefault(); go(1);
     } else if (e.key === "ArrowLeft") {
       e.preventDefault(); go(-1);
