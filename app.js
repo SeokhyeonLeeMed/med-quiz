@@ -214,6 +214,25 @@
     if (Array.isArray(ans)) return ans.length === set.length && ans.every(function (x) { return set.indexOf(x) >= 0; });
     return set.length === 1 && set[0] === ans;
   }
+  // 주관식(t "self") 직접 입력(2026-11-25 사용자 지시: "완전 같으면 맞다고 하고, 다르면 알아서 채점하라고").
+  // 모범 답안(q.h)과 **똑같을 때만** 자동으로 맞힘. 같다고 보는 차이는 띄어쓰기·대소문자·전각/반각(NFKC, ①→1)·
+  // 따옴표·굵게 표시·끝의 마침표뿐이다. 비교 후보: 모범 답안 전체 / 괄호 부분을 뺀 것 /
+  // 답이 "본말(다른 이름, 줄임말)" 한 덩어리면 괄호 안의 이름 하나하나. "(추정)"·"(Claude 보완)"·"(서술형)" 꼬리표는 먼저 지운다.
+  // 다르면 해설을 보이고 스스로 채점한다(한 번에 채점이면 답안 제출 때 '주관식 채점' 화면에서).
+  function normAns(x) {
+    return String(x || "").normalize("NFKC").toLowerCase().replace(/\*\*|__|[`"'“”‘’「」]/g, "").replace(/\s+/g, "").replace(/[.。]+$/, "");
+  }
+  function ansCandidates(h) {
+    const base = String(h || "").replace(/\((?:추정|Claude 보완|서술형)\)/g, "").trim();
+    const out = [base, base.replace(/\([^()]*\)/g, " ").trim()];
+    const m = base.match(/^([^()]+)\(([^()]+)\)$/);
+    if (m) m[2].split(/\s*,\s*/).forEach(function (x) { if (/[A-Za-z가-힣]/.test(x)) out.push(x); });
+    return out.map(normAns).filter(Boolean);
+  }
+  function ansMatch(q, typed) {
+    const t = normAns(typed);
+    return !!t && ansCandidates(q.h).indexOf(t) >= 0;
+  }
   function qNumLabel(r) { return isExam(r.quiz) ? (r.q.label || r.q.n) + "번" : (r.idx + 1) + "번"; }
   function isMix(id) { return id.indexOf("MIX:") === 0; }
   // 발문 앞 〔출처〕(주차별 기출 세트·기출 모음): 데이터에는 그대로 두고(풀던 세션의 문항 지문 fp가 바뀌지 않게) 화면에서만 떼어
@@ -221,14 +240,59 @@
   // 출처 조각마다 출제 교수(q.srcs, _tools/exset_prof.cjs)를 붙인다. 추정이면 "(추정)", 모르면 "교수 표시 없음"
   const SRC_TAG = /^〔([^〕]*)〕\s*/;
   function qStem(q) { return String(q.q || "").replace(SRC_TAG, ""); }
-  function srcLine(q) {
-    if (q.srcs && q.srcs.length) return q.srcs.map(function (s) {
-      return esc(String(s.s).replace(/ — Claude 보완$/, "")) + ' · <span class="pf' + (s.pf ? "" : " none") + '"' +
-        (s.est ? ' title="2025학년도 시험은 교수 표시가 없어 2026 담당 교수님이 냈다고 추정했습니다"' : "") + ">" +
-        (s.pf ? esc(s.pf) + " 교수님" + (s.est ? "(추정)" : "") : "교수 표시 없음") + "</span>";
-    }).join('<span class="eq"> = </span>');
+  // 출처 줄 양식(2026-11-25 사용자 지시: 시험 세트·주차별 기출·기출 모음·랜덤/오답 다시의 표기를 하나로):
+  //   "출처 2025 중간 12번 · 이지연 교수님", 같은 문항이 여러 해에 나왔으면 " = "로 잇는다.
+  //   시험 이름은 examShort(“2025학년도 2학기 중간고사” → “2025 중간”, “기출문제집(v2021) 7. …” → “기출문제집 7단원”).
+  //   교수: 문항 pf → (없으면) 주차별 기출 세트가 같은 문항에 붙인 판정(추정 포함) → 그래도 없으면 "교수 표시 없음". "미상"도 표시 없음.
+  //   강의 연습 문제는 랜덤·오답 다시에서만 "1주차 제목 3번 · 교수님"으로 보인다.
+  function examShort(qz) {
+    const t = String(qz.title || "").replace(/ \(Claude 보완\)$/, "");
+    let m = t.match(/^(\d{4})학년도\s*\d학기\s*(중간|기말)고사\s*(.*)$/);
+    if (m) return m[1] + " " + m[2] + (m[3] ? " " + m[3] : "");
+    m = t.match(/^기출문제집\(v\d{4}\)\s*([\d·]+)\./);
+    if (m) return "기출문제집 " + m[1] + "단원";
+    return t;
+  }
+  const okPf = function (pf) { return pf && !/미상/.test(pf) ? pf : null; };
+  const segKey = function (sid, s) { return sid + "|" + String(s).replace(/\s+/g, "").replace(/—Claude보완$/, ""); };
+  let exSrcIdx = null;
+  function exSrcIndex() {
+    if (exSrcIdx && Object.keys(exSrcIdx).length) return exSrcIdx;
+    exSrcIdx = {};
+    BANK.forEach(function (qz) {
+      if (!qz.exset) return;
+      qz.questions.forEach(function (q) {
+        (q.srcs || []).forEach(function (x) {
+          const k = segKey(qz.subjectId, x.s), cur = exSrcIdx[k];
+          if (x.pf && (!cur || (cur.est && !x.est))) exSrcIdx[k] = { pf: x.pf, est: !!x.est };
+        });
+      });
+    });
+    return exSrcIdx;
+  }
+  function segHTML(label, pf, est) {
+    return esc(label) + ' · <span class="pf' + (pf ? "" : " none") + '"' +
+      (est ? ' title="2025학년도 시험은 교수 표시가 없어 2026 담당 교수님이 냈다고 추정했습니다"' : "") + ">" +
+      (pf ? esc(pf) + " 교수님" + (est ? "(추정)" : "") : "교수 표시 없음") + "</span>";
+  }
+  const SRC_EQ = '<span class="eq"> = </span>';
+  // r: qByKey 결과. lec: 강의 연습 문제도 출처를 보일지(랜덤·오답 다시)
+  function srcLine(r, lec) {
+    const q = r.q, qz = r.quiz;
+    if (q.srcs && q.srcs.length) return q.srcs.map(function (x) { return segHTML(String(x.s).replace(/ — Claude 보완$/, ""), x.pf, x.est); }).join(SRC_EQ);
     const m = String(q.q || "").match(SRC_TAG);
-    return m ? esc(m[1]) : "";
+    if (m) return m[1].split(/\s*=\s*/).map(function (x) {
+      const f = exSrcIndex()[segKey(qz.subjectId, x)];
+      return segHTML(x.replace(/ — Claude 보완$/, ""), okPf(q.pf) || (f && f.pf), !okPf(q.pf) && f && f.est);
+    }).join(SRC_EQ);
+    if (isExam(qz)) {
+      const label = examShort(qz) + " " + qNumLabel(r);
+      let pf = okPf(q.pf), est = false;
+      if (!pf) { const f = exSrcIndex()[segKey(qz.subjectId, label)]; if (f) { pf = f.pf; est = f.est; } }
+      return segHTML(label, pf, est);
+    }
+    if (lec) return segHTML(qz.week + " " + qz.title + " " + qNumLabel(r), qz.prof || null, false);
+    return "";
   }
   // 랜덤 20문제: "MIX:과목"(전체) 또는 "MIX:과목:범위"(과목의 mixRanges — 예: 중간·기말, 2026-11-11)
   function mixRange(id) {
@@ -548,6 +612,38 @@
     session.reveal[key] = true;
     persist(); renderQuiz(true);
   }
+  // 바로 채점: 입력한 답을 제출 → 모범 답안과 같으면 맞힘(auto), 다르면 해설과 함께 스스로 채점 단추
+  function selfSubmit() {
+    const key = session.keys[session.pos];
+    const el = document.getElementById("selfAns");
+    const v = el ? el.value : "";
+    if (!v.trim() || session.answers[key] !== undefined) return;
+    const r = qv(key, session);
+    session.typed = session.typed || {}; session.auto = session.auto || {};
+    session.typed[key] = v;
+    session.reveal = session.reveal || {}; session.reveal[key] = true;
+    if (ansMatch(r.q, v)) { session.answers[key] = "ok"; session.auto[key] = true; if (session.passed) delete session.passed[key]; }
+    persist(); renderQuiz(true);
+  }
+  // 한 번에 채점: 입력란의 글을 답안으로 적어 둔다(다른 문항으로 갈 때·입력란을 벗어날 때). 같으면 "ok", 다르면 "pending"(제출 때 스스로 채점)
+  function captureTyped() {
+    if (!session || !isEnd()) return;
+    const el = document.getElementById("selfAns");
+    if (!el) return;
+    const key = el.dataset.key;
+    if (!key || session.keys.indexOf(key) < 0) return;
+    const r = qv(key, session), v = el.value;
+    session.typed = session.typed || {}; session.auto = session.auto || {};
+    session.typed[key] = v;
+    if (session.answers[key] === "bad" || (session.answers[key] === "ok" && !session.auto[key])) return;   // 이미 스스로 채점한 답
+    if (v.trim()) {
+      const okk = ansMatch(r.q, v);
+      session.answers[key] = okk ? "ok" : "pending";
+      if (okk) session.auto[key] = true; else delete session.auto[key];
+      if (session.passed) delete session.passed[key];
+    } else { delete session.answers[key]; delete session.auto[key]; }
+    persist();
+  }
   function gradeSelf(ok) {
     const key = session.keys[session.pos];
     if (session.answers[key] !== undefined) return;
@@ -556,7 +652,7 @@
     persist(); renderQuiz();
   }
 
-  // 문항 이동(2026-11-25 PASS): 답하지 않아도 다음 문항으로 넘어갈 수 있다(넘긴 문항은 passed에 적어 답안 표기란에 P로 보인다).
+  // 문항 이동(2026-11-25): 답하지 않아도 '다음'으로 넘어갈 수 있다(넘긴 문항은 passed에 적어 답안 표기란에 점선 칸으로 보인다. 'PASS'라는 말은 쓰지 않는다).
   // 마지막 문항 다음은 아직 답하지 않은 첫 문항으로 돌아가고, 남은 문항이 없으면 끝내기(채점)로 간다.
   function unansweredIdx() {
     return session.keys.map(function (k, i) { return session.answers[k] === undefined ? i : -1; }).filter(function (i) { return i >= 0; });
@@ -567,12 +663,14 @@
     return u.length ? u[0] : null;
   }
   function moveTo(i) {
+    captureTyped();
     session.pos = i;
     persist();
     renderQuiz();
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
   function go(delta) {
+    captureTyped();
     if (delta < 0) { if (session.pos > 0) moveTo(session.pos - 1); return; }
     const key = session.keys[session.pos];
     if (session.answers[key] === undefined) { session.passed = session.passed || {}; session.passed[key] = true; }
@@ -587,20 +685,50 @@
   }
   // 끝내기·답안 제출: 답하지 않은 문항이 있거나 한 번에 채점이면 한 번 묻는다. 답하지 않은 문항은 틀린 것으로 센다
   function finishAsk() {
+    captureTyped();
     const n = unansweredIdx().length;
     if (n || isEnd()) {
       const msg = (n ? "답하지 않은 문항이 " + n + "개 있습니다. 답하지 않은 문항은 틀린 것으로 셉니다." + NL + NL : "") +
         (isEnd() ? "답안을 제출하고 채점할까요?" : "이대로 끝내고 결과를 볼까요?");
       if (!confirm(msg)) return;
     }
+    // 한 번에 채점: 모범 답안과 다른 주관식 답은 결과 전에 스스로 채점한다
+    if (session.keys.some(function (k) { return session.answers[k] === "pending"; })) return renderSelfGradeAll();
     finish();
+  }
+  // 주관식 채점 화면(한 번에 채점의 답안 제출 뒤): 내 답 · 모범 답안 · 해설(펼치기) · 맞혔다/틀렸다
+  function renderSelfGradeAll() {
+    setNav("");
+    const keys = session.keys.filter(function (k) { return session.answers[k] === "pending" || (session.sg && session.sg[k]); });
+    session.sg = session.sg || {};
+    keys.forEach(function (k) { session.sg[k] = true; });
+    persist();
+    const left = keys.filter(function (k) { return session.answers[k] === "pending"; }).length;
+    let html = '<p class="ov-kicker">답안 제출</p><h1>주관식 채점</h1>' +
+      '<p class="sub">모범 답안과 똑같지 않은 주관식 답 ' + keys.length + "개입니다. 해설을 보고 직접 채점하면 결과가 나옵니다.</p>" +
+      '<div class="stack sg-list">' + keys.map(function (k) {
+        const r = qv(k, session), i = session.keys.indexOf(k), a = session.answers[k];
+        return '<div class="card sg-item">' +
+          '<div class="rq"><b>' + (i + 1) + ".</b> " + fmt(stemOf(qStem(r.q).replace("[공통 지문] ", ""))) + "</div>" +
+          '<dl class="sg-dl"><dt>내 답</dt><dd class="myans">' + esc((session.typed || {})[k] || "") + "</dd>" +
+          "<dt>모범 답안</dt><dd>" + fmt(r.q.h || "") + "</dd></dl>" +
+          '<details class="sg-ex"><summary>해설 보기</summary><div class="explain">' + explanationHTML(k, session.orders[k], null, r) + "</div></details>" +
+          '<div class="sg-btns">' +
+            '<button class="btn' + (a === "ok" ? " primary" : "") + '" data-act="sgset" data-key="' + esc(k) + '" data-v="ok">맞혔다</button>' +
+            '<button class="btn' + (a === "bad" ? " primary" : "") + '" data-act="sgset" data-key="' + esc(k) + '" data-v="bad">틀렸다</button>' +
+          "</div></div>";
+      }).join("") + "</div>" +
+      '<div class="ov-acts"><button class="btn" data-act="sgback">답안으로 돌아가기</button><span></span>' +
+        '<button class="btn primary" data-act="sgdone"' + (left ? " disabled" : "") + ">" + (left ? "남은 채점 " + left + "개" : "결과 보기") + "</button></div>";
+    setHTML(html);
   }
 
   function finish() {
     const items = session.keys.map(function (k) {
       const r = qv(k, session);
       const ch = session.answers[k];
-      const it = { key: k, chosen: ch === undefined ? null : ch, order: session.orders[k], correct: isRight(r.q, ch) };
+      const it = { key: k, chosen: ch === undefined || ch === "pending" ? null : ch, order: session.orders[k], correct: isRight(r.q, ch) };
+      if (session.typed && session.typed[k] && session.typed[k].trim()) { it.typed = session.typed[k]; if (session.auto && session.auto[k]) it.auto = true; }
       if (session.variants && session.variants[k]) it.variant = session.variants[k];
       return it;
     });
@@ -1099,7 +1227,7 @@
 
     const cnt = { mc: 0, multi: 0, pick: 0, self: 0 };
     qs.forEach(function (q) { cnt[qType(q)] = (cnt[qType(q)] || 0) + 1; });
-    const kinds = [["mc", "한 개 고르기"], ["multi", "여러 개 고르기"], ["pick", "모두 고르기"], ["self", "스스로 채점"]]
+    const kinds = [["mc", "한 개 고르기"], ["multi", "여러 개 고르기"], ["pick", "모두 고르기"], ["self", "주관식"]]
       .filter(function (k) { return cnt[k[0]]; }).map(function (k) { return k[1] + " " + cnt[k[0]]; });
     const fa = fullAttempts(quizId);
     const best = fa.reduce(function (m, a) { return Math.max(m, pct(a)); }, 0);
@@ -1126,10 +1254,10 @@
     const noShuffle = exam;   // 기출 시험은 해설이 ①② 번호를 가리켜 섞지 않는다
     const how = [
       "답안 표기란의 번호를 누르면 어느 문항으로든 갈 수 있습니다.",
-      "모르는 문항은 <b>PASS</b>로 넘기고 나중에 돌아와 풀 수 있습니다. 넘긴 문항은 답안 표기란에 P로 표시됩니다.",
+      "모르는 문항은 답하지 않고 '다음'으로 넘어갔다가 나중에 돌아와 풀 수 있습니다. 넘긴 문항은 답안 표기란에 점선 칸으로 표시됩니다.",
       "마지막 문항 다음에는 아직 답하지 않은 문항으로 돌아갑니다. 답안 표기란 아래 단추로 언제든 끝낼 수 있고, 답하지 않은 문항은 틀린 것으로 셉니다."
     ];
-    if (cnt.self) how.push("스스로 채점 문항은 채점 방식과 관계없이 해설을 본 뒤 바로 스스로 채점합니다.");
+    if (cnt.self) how.push("주관식은 답을 직접 입력합니다. 모범 답안과 똑같으면(띄어쓰기·대소문자 무시) 맞힘으로 채점하고, 다르면 해설을 보고 직접 채점합니다. 한 번에 채점이면 답안을 제출할 때 채점합니다.");
 
     let html = '<p class="ov-kicker">시험 개요</p>' +
       "<h1>" + esc(mix ? subjName + " " + meta.title : (exam ? "" : meta.week + " ") + meta.title) + "</h1>" +
@@ -1192,20 +1320,20 @@
     const correctN = session.keys.filter(function (k) { return session.answers[k] !== undefined && isRight(qv(k, session).q, session.answers[k]); }).length;
 
     // 답안 표기란(2026-11-25): 번호 칸을 눌러 어느 문항으로든 간다. 바로 채점이면 맞힘·틀림 색, 한 번에 채점이면 답한 칸만 표시.
-    // 넘긴(PASS) 문항은 P 표시. 아래 '끝내고 결과 보기/답안 제출'로 언제든 채점한다
+    // 답하지 않고 넘긴 문항은 점선 칸. 아래 '끝내고 결과 보기/답안 제출'로 언제든 채점한다(2026-11-25: 'PASS'라는 말은 쓰지 않는다)
     const qmap = '<aside class="qmap" aria-label="답안 표기란"><div class="qmap-h"><span>답안 표기란</span><span>' + doneN + "/" + total + "</span></div>" +
       '<div class="qmap-grid">' + session.keys.map(function (k, i) {
         const a = session.answers[k];
         const st = a === undefined ? (passed[k] ? "pass" : "") : end ? "done" : (isRight(qv(k, session).q, a) ? "ok" : "bad");
         const c = st + (i === session.pos ? " cur" : "");
-        const tip = a === undefined ? (passed[k] ? " · 넘김(PASS)" : "") : end ? " · 답함" : st === "ok" ? " · 맞힘" : " · 틀림";
+        const tip = a === undefined ? (passed[k] ? " · 넘김" : "") : end ? " · 답함" : st === "ok" ? " · 맞힘" : " · 틀림";
         return '<button type="button" class="' + c.trim() + '" data-act="jump" data-pos="' + i + '" title="' + (i + 1) + "번" + tip + '">' + (i + 1) + "</button>";
       }).join("") + "</div>" +
       '<div class="qmap-f"><button type="button" class="btn small' + (end ? " primary" : "") + '" data-act="finish">' + (end ? "답안 제출" : "끝내고 결과 보기") + "</button></div></aside>";
 
     const mixOrWrong = isMix(session.quizId) || session.mode === "wrong";
-    const from = srcLine(q);
-    const showSrc = exam || mixOrWrong || !!from;
+    const from = srcLine(r, mixOrWrong);
+    const showSrc = exam || !!from;
     const num = session.pos + 1;
     let html =
       '<div class="qhead"><div><b>' + esc(subjName + " · " + (isMix(session.quizId) ? meta.title : (exam ? "기출 " : meta.week + " ") + meta.title)) + '</b> <span class="badge">' + modeLabel(session.mode) + "</span>" +
@@ -1215,13 +1343,11 @@
       '<div class="qwrap">' + qmap +
       '<div class="card qcard">' +
         (showSrc ? '<div class="qsrc">' +
-          (exam || mixOrWrong ? "<span>" + esc((exam ? "기출 " : r.quiz.week + " · ") + r.quiz.title) + " · " + esc(qNumLabel(r)) + "</span>" : "") +
           (from ? '<span class="from"><b>출처</b> ' + from + "</span>" : "") +
-          (q.pf ? ' <span class="badge pf">출제 ' + esc(q.pf) + " 교수님</span>" : "") +
           (q.alt ? ' <span class="badge alt">Claude 보완</span>' : "") +
           (t === "multi" ? ' <span class="badge">' + answerSet(q).length + "개 고르기</span>" : "") +
           (t === "pick" ? ' <span class="badge">모두 고르기</span>' : "") +
-          (t === "self" ? ' <span class="badge">스스로 채점</span>' : "") + "</div>" : "");
+          (t === "self" ? ' <span class="badge">주관식</span>' : "") + "</div>" : "");
 
     if (exam) html += examStemHTML(r, esc(String(r.q.label || r.q.n)));   // 기출은 시험 문항 번호(복기 안 된 번호는 건너뛴다)
     if (exam && q.notes && q.notes.length) html += '<div class="xnote">' + q.notes.map(function (n) { return "<div>" + fmt(n) + "</div>"; }).join("") + "</div>";
@@ -1268,18 +1394,26 @@
     if (end && (t === "multi" || t === "pick")) {
       html += '<p class="hint qsel">' + (t === "multi" ? sel.length + "/" + answerSet(q).length + "개 선택" : sel.length + "개 선택") + " · 고른 것이 그대로 답안이 됩니다</p>";
     }
-    if (t === "self" && !revealed) {
-      html += '<div class="actions"><button class="btn primary" data-act="reveal">답을 생각한 뒤 해설 보기</button></div>';
+    // 주관식: 답을 직접 입력한다(Enter 제출 · Shift+Enter 줄바꿈)
+    const typed = (session.typed || {})[key] || "";
+    if (t === "self" && !revealed && !(end && (chosen === "bad" || (chosen === "ok" && !(session.auto || {})[key])))) {
+      html += '<div class="selfin"><label for="selfAns">내 답</label>' +
+        '<textarea id="selfAns" data-key="' + esc(key) + '" rows="2" placeholder="답을 입력하세요 (Enter 제출 · Shift+Enter 줄바꿈)">' + esc(typed) + "</textarea>" +
+        (end ? '<p class="hint">답안을 제출할 때 모범 답안과 똑같으면 맞힘, 다르면 그때 해설을 보고 직접 채점합니다.</p>'
+          : '<div class="actions"><button class="btn primary" data-act="selfsubmit">제출</button><button class="btn" data-act="reveal">모르겠음 · 해설 보기</button></div>' +
+            '<p class="hint">모범 답안과 똑같으면(띄어쓰기·대소문자 무시) 맞힘으로 채점하고, 다르면 해설을 보고 직접 채점합니다.</p>') +
+        "</div>";
     }
+    if (revealed && typed.trim()) html += '<div class="myans-line"><b>내 답</b> <span class="myans">' + esc(typed) + "</span></div>";
 
-    // 오른쪽 단추: 답했으면 '다음', 아니면 'PASS'. 갈 곳이 없으면(마지막이고 남은 문항 없음) 결과 보기 / 답안 제출
+    // 오른쪽 단추: 답했든 안 했든 '다음'. 갈 곳이 없으면(마지막이고 남은 문항 없음) 결과 보기 / 답안 제출 / 끝내기
     const target = nextTarget();
-    const rightLabel = target === null ? (end ? "답안 제출" : answered ? "결과 보기" : "끝내기") : answered ? "다음" : "PASS";
-    const rightPrimary = answered || target === null;
+    const rightLabel = target === null ? (end ? "답안 제출" : answered ? "결과 보기" : "끝내기") : "다음";
+    const rightPrimary = true;
     const navHTML = '<div class="qnav">' +
       '<button class="btn" data-act="prev"' + (session.pos === 0 ? " disabled" : "") + ">이전</button>" +
-      '<span class="hint">숫자키 1–9로 선택 · Enter/→ ' + (answered ? "다음" : "PASS") + "</span>" +
-      '<button class="btn' + (rightPrimary ? " primary" : " pass") + '" data-act="next">' + rightLabel + "</button>" +
+      '<span class="hint">' + (t === "self" ? "→ 다음 · ← 이전" : "숫자키 1–9로 선택 · Enter/→ 다음") + "</span>" +
+      '<button class="btn' + (rightPrimary ? " primary" : "") + '" data-act="next">' + rightLabel + "</button>" +
       "</div>";
     html += navHTML;
 
@@ -1292,9 +1426,10 @@
     }
     if (revealed) {
       html += '<div class="explain" id="verdict">' + explanationHTML(key, order, null, r) + "</div>";
+      const auto = (session.auto || {})[key];
       html += answered
-        ? '<div class="verdict ' + (chosen === "ok" ? "ok" : "bad") + '">스스로 채점: ' + (chosen === "ok" ? "맞혔다" : "틀렸다") + "</div>"
-        : '<div class="selfgrade"><span>내 답은?</span><button class="btn" data-act="selfok">맞혔다</button><button class="btn" data-act="selfbad">틀렸다·모르겠다</button></div>';
+        ? '<div class="verdict ' + (chosen === "ok" ? "ok" : "bad") + '">' + (auto ? "정답입니다. 모범 답안과 같습니다." : "스스로 채점: " + (chosen === "ok" ? "맞혔다" : "틀렸다")) + "</div>"
+        : '<div class="selfgrade"><span>' + (typed.trim() ? "모범 답안과 다릅니다. 직접 채점하세요." : "내 답은?") + '</span><button class="btn" data-act="selfok">맞혔다</button><button class="btn" data-act="selfbad">틀렸다·모르겠다</button></div>';
     }
 
     // 해설이 보이면 맨 아래(원래 자리)에도 이전·다음 버튼을 둔다
@@ -1309,6 +1444,13 @@
       const on = function () { opts.classList.remove("nohover"); app.removeEventListener("mousemove", on); };
       app.addEventListener("mousemove", on);
     }
+    const sa = document.getElementById("selfAns");
+    if (sa) {
+      sa.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (isEnd()) go(1); else selfSubmit(); }
+      });
+      sa.addEventListener("change", captureTyped);
+    }
     const curCell = app.querySelector(".qmap-grid .cur");
     if (curCell) {
       const g = curCell.parentNode;
@@ -1321,10 +1463,11 @@
     }
   }
 
-  function answerText(r, order, ch) {
-    if (ch === null || ch === undefined) return "없음";
-    if (ch === "ok") return "스스로 채점: 맞힘";
-    if (ch === "bad") return "스스로 채점: 틀림";
+  function answerText(r, order, ch, it) {
+    const ty = it && it.typed ? "「" + esc(it.typed) + "」 · " : "";
+    if (ch === null || ch === undefined) return ty ? ty + "채점 안 함" : "없음";
+    if (ch === "ok") return ty + (it && it.auto ? "모범 답안과 같음" : "스스로 채점: 맞힘");
+    if (ch === "bad") return ty + "스스로 채점: 틀림";
     const arr = Array.isArray(ch) ? ch : [ch];
     return arr.map(function (o) { return optLab(r.q, order.indexOf(o)) + " " + fmt(r.q.o[o] || ""); }).join(", ");
   }
@@ -1341,9 +1484,9 @@
       return '<details class="card review-item"' + (it.correct ? "" : " open") + ">" +
         '<summary><span class="mark ' + (it.correct ? "ok" : "bad") + '">' + (it.correct ? "○" : "✕") + "</span>" +
           '<div><div class="rq">' + (i + 1) + ". " + fmt(stemOf(qStem(r.q).replace("[공통 지문] ", ""))) + "</div>" +
-          (srcLine(r.q) ? '<div class="ra from"><b>출처</b> ' + srcLine(r.q) + "</div>" : "") +
-          '<div class="ra">' + (exam || isMix(att.quizId) || att.mode === "wrong" ? esc(qNumLabel(r)) + " · " : "") +
-            "내 답 " + (stale ? "(문항이 개정되어 예전 선택을 표시하지 못함)" : answerText(r, order, it.chosen)) +
+          (srcLine(r, isMix(att.quizId) || att.mode === "wrong") ? '<div class="ra from"><b>출처</b> ' + srcLine(r, isMix(att.quizId) || att.mode === "wrong") + "</div>" : "") +
+          '<div class="ra">' +
+            "내 답 " + (stale ? "(문항이 개정되어 예전 선택을 표시하지 못함)" : answerText(r, order, it.chosen, it)) +
             (it.correct ? "" : " · 정답 " + rightTxt) + "</div></div></summary>" +
         '<div class="explain">' + explanationHTML(it.key, order, stale ? null : it.chosen, r) + "</div>" +
       "</details>";
@@ -1909,6 +2052,12 @@
     else if (act === "jump") jump(+b.dataset.pos);
     else if (act === "submit") submitMulti();
     else if (act === "reveal") revealSelf();
+    else if (act === "selfsubmit") selfSubmit();
+    else if (act === "sgset") {
+      if (session && session.answers[b.dataset.key] !== undefined) { session.answers[b.dataset.key] = b.dataset.v; if (session.auto) delete session.auto[b.dataset.key]; persist(); renderSelfGradeAll(); }
+    }
+    else if (act === "sgback") { renderQuiz(); window.scrollTo({ top: 0 }); }
+    else if (act === "sgdone") finish();
     else if (act === "selfok") gradeSelf(true);
     else if (act === "selfbad") gradeSelf(false);
     else if (act === "discard") {
@@ -1955,7 +2104,7 @@
   document.addEventListener("keydown", function (e) {
     if (!lb.hidden) { if (e.key === "Escape") closeLightbox(); return; }
     if (!session || !document.querySelector(".qcard")) return;
-    if (e.target.tagName === "INPUT") return;
+    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
     const key = session.keys[session.pos];
     const r = qByKey(key);
     const t = qType(r.q);
