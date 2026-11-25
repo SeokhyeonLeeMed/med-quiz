@@ -299,6 +299,12 @@
     const p = id.split(":"), s = SUBJ[p[1]];
     return p[2] && s && s.mixRanges ? s.mixRanges.filter(function (r) { return r.key === p[2]; })[0] || null : null;
   }
+  // 랜덤 범위 표시: "1~7주차" / "8주차부터" / "전체 범위"
+  function mixWeeks(id) {
+    const r = mixRange(id);
+    return !r ? "전체 범위" : r.to >= 99 ? r.from + "주차부터" : r.from + "~" + r.to + "주차";
+  }
+  function mixCount(id) { return mixQuizzes(id).reduce(function (n, qz) { return n + qz.questions.length; }, 0); }
   function weekNum(qz) { const m = String(qz.week || "").match(/(\d+)/); return m ? +m[1] : 0; }
   function mixQuizzes(id) {
     const r = mixRange(id);
@@ -985,7 +991,7 @@
       if (nSelf) extra = "<span>스스로 채점 " + nSelf + "</span>";
     }
     return '<div class="card quiz-card' + (mix ? " special" : "") + (exam ? " exam" : "") + '">' +
-      '<div class="wk">' + esc(mix ? "전체 범위" : meta.week + (meta.prof ? " · " + meta.prof : "")) + "</div>" +
+      '<div class="wk">' + esc(mix ? mixWeeks(meta.id) : meta.week + (meta.prof ? " · " + meta.prof : "")) + "</div>" +
       '<div class="ttl">' + esc(meta.title) + "</div>" +
       '<div class="meta"><span>' + n + "문항</span>" + extra +
         (fa.length
@@ -1164,7 +1170,9 @@
         });
         if (!firstSec) html += '<h3 class="sec">연습 문제 <span class="hint">강의 주차별 문항</span></h3>';   // 위에 PDF 칸이 있으면 제목을 단다
         html += '<div class="quiz-grid">' + groups.map(function (g) { return g.length > 1 ? weekGroupCard(g) : quizCard(g[0], g[0].questions.length); }).join("") +
-          (subj.mixRanges ? subj.mixRanges.map(function (r) { return quizCard(quizMeta("MIX:" + subj.id + ":" + r.key), 20); }).join("") : quizCard(quizMeta("MIX:" + subj.id), 20)) + "</div>";
+          (subj.mixRanges ? subj.mixRanges.map(function (r) { return "MIX:" + subj.id + ":" + r.key; }) : ["MIX:" + subj.id])
+            .map(function (id) { return { id: id, n: mixCount(id) }; }).filter(function (x) { return x.n > 0; })
+            .map(function (x) { return quizCard(quizMeta(x.id), Math.min(20, x.n)); }).join("") + "</div>";
       }
       if (eq.length) {
         html += '<h3 class="sec">기출 문제 <span class="hint">해설지 원고 기반 · 서술형·복기 실패 문항은 해설을 보고 스스로 채점</span></h3>' +
@@ -1239,6 +1247,7 @@
 
     const rows = [];
     rows.push(["문항", (mix ? "범위 안에서 무작위 " + n : mode === "wrong" ? "지난번에 틀린 " + n : n) + "문항" + (mix ? "" : " (" + kinds.join(" · ") + ")")]);
+    if (mix) rows.push(["범위", esc(mixWeeks(quizId)) + " · " + mixQuizzes(quizId).length + "개 세트(연습 문제·주차별 기출)에서 뽑습니다"]);
     if (!mix && qz.prof) rows.push(["강의", esc(qz.week + " · " + qz.prof + " 교수님")]);
     if (!mix && qz.exset) {
       const pn = String(qz.prof || "").split(/\s*·\s*/).filter(Boolean).join("·");
