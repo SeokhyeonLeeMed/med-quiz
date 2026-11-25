@@ -592,3 +592,18 @@ body.locked .topbar { display: none; }
 @supports (padding: env(safe-area-inset-top)) {
   .topbar { padding-top: env(safe-area-inset-top); height: calc(46px + env(safe-area-inset-top)); }
 }
+
+/* ---------- 중간고사 범위 폴더(과목 화면, 2026-11-25) ---------- */
+.fold { margin-top: 14px; border-top: 1px solid var(--ink-2); }
+.fold > summary {
+  cursor: pointer; list-style: none; display: flex; align-items: baseline; gap: 10px;
+  padding: 11px 6px; border-bottom: 1px solid var(--line); background: var(--surface-2); font-size: 14.5px;
+}
+.fold > summary::-webkit-details-marker { display: none; }
+.fold > summary::before { content: "▸"; color: var(--ink-3); font-size: 12px; width: 10px; }
+.fold[open] > summary::before { content: "▾"; }
+.fold > summary .hint { font-size: 12.5px; }
+.fold > .quiz-grid { border-top: 0; }
+
+/* ---------- 강의록 탭(2026-11-25) ---------- */
+.quiz-card.doc .round-info .lab { font-size: 13px; color: var(--ink-2); }

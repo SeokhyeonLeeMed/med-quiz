@@ -112,12 +112,14 @@
     return prepareItems(m.qz.questions.map((_, i) => ({ qz: m.qz, i: i })), rng(seedOf(code + "|" + m.id)));
   }
 
+  // 사이트의 "주차" 표현은 "주 차"로(2026-11-25, app.js koWeek와 같다). 문제지·해설지의 글 조각과 파일 이름에 쓴다
+  const kw = (s) => String(s).replace(/주차/g, "주 차");
   // ---------- 글 조각(run) ----------
   // **굵게**, ^위첨자, 줄바꿈을 조각으로 나눈다. st: {b, i, c, sz}
   function runs(text, st) {
     st = st || {};
     const out = [];
-    String(text == null ? "" : text).split("**").forEach(function (part, k) {
+    kw(text == null ? "" : text).split("**").forEach(function (part, k) {
       if (!part) return;
       const b = st.b || k % 2 === 1;
       const re = /\^([−\-]?[0-9A-Za-zΔ]+)/g;
@@ -156,7 +158,7 @@
     });
     return out;
   }
-  const R = (t, st) => Object.assign({ t: t }, st || {});
+  const R = (t, st) => Object.assign({ t: typeof t === "string" ? kw(t) : t }, st || {});
   const TAB = { t: "\t" };
 
   // 문단 모델: {k:"p", sz, ln, bf, af, il, hg, jc, tabs, bdr:{sz,c,sp}, runs}
@@ -1227,7 +1229,7 @@ const NANUM = "https://cdn.jsdelivr.net/gh/google/fonts@e7db6ca603fd4862010383ff
 
   function fileBase(doc) {
     const m = doc.meta;
-    return m.name + " " + (doc.kind === "exam" ? "문제지" : "해설지") + (m.shuffle ? " (판 " + doc.code + ")" : "");
+    return kw(m.name) + " " + (doc.kind === "exam" ? "문제지" : "해설지") + (m.shuffle ? " (판 " + doc.code + ")" : "");
   }
 
   // ======================================================================
@@ -1409,7 +1411,7 @@ const NANUM = "https://cdn.jsdelivr.net/gh/google/fonts@e7db6ca603fd4862010383ff
     ensureRoot();
     state = { id: quizId, meta: m, kind: "exam", code: savedCode(quizId) || newCode(), seq: 0, doc: null };
     saveCode(quizId, state.code);
-    root.querySelector(".ttl").textContent = m.subject + " · " + (m.type === "lecture" ? m.qz.week + " " + m.qz.title : m.head);
+    root.querySelector(".ttl").textContent = kw(m.subject + " · " + (m.type === "lecture" ? m.qz.week + " " + m.qz.title : m.head));
     root.querySelector(".code input").value = state.code;
     // 기출은 섞지 않으므로 판 번호가 필요 없다
     root.querySelector(".code").hidden = !m.shuffle;

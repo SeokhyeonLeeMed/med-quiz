@@ -30,7 +30,11 @@
       imgURL(p).then(function (u) { im.src = u; }, function () { im.alt = "이미지를 불러오지 못했다"; });
     });
   }
-  function setHTML(html) { app.innerHTML = html; hydrate(app); }
+  // 사이트의 모든 "주차" 표현은 "주 차"로 보인다(2026-11-25 사용자 지시, 한글 맞춤법: 차례를 나타내는 의존명사 '차'는 띄어 쓴다).
+  // 데이터·원고는 기출 빌드가 다시 만드는 파일이 많아 그대로 두고, 화면·파일 이름으로 내보내는 길목에서 바꾼다(print.js도 같다).
+  function koWeek(s) { return String(s == null ? "" : s).replace(/주차/g, "주 차"); }
+  window.QUIZ_KOWEEK = koWeek;
+  function setHTML(html) { app.innerHTML = koWeek(html); hydrate(app); }
 
   let BANK = [];
   const BY_ID = {};
@@ -356,6 +360,8 @@
   function setNav(which) {
     document.getElementById("navHome").classList.toggle("active", which === "home");
     document.getElementById("navHistory").classList.toggle("active", which === "history");
+    const lb = document.getElementById("navLec");
+    if (lb) lb.classList.toggle("active", which === "lec");
     const ad = document.getElementById("navAdmin");
     if (ad) ad.classList.toggle("active", which === "admin");
   }
@@ -1046,13 +1052,15 @@
       '<div class="ttl">' + esc(base) + "</div>" + rows + "</div>";
   }
 
-  // 과목 화면에서 받는 PDF(data/docs.js) — 받기만 한다(2026-10-26 사용자 지시).
-  // 종류(kind): "lecsupp" 기출+강의록(기본) / "guide" 강의록 해설(2026-11-11).
+  // 받는 PDF(data/docs.js + data/lecnotes.js) — 받기만 한다. 2026-11-25부터 과목 화면이 아니라 '강의록' 탭(renderLectures)에서 받는다.
+  // 종류(kind): "lecture" 강의 원본(2026-11-25) / "lecsupp" 기출 보완판(강의록 여백에 기출을 붙인 판) / "guide" 슬라이드 해설(2026-11-11).
   // 게시본은 boot.js의 QUIZ_DOC(id)가 docs/<id>.bin을 풀어 blob URL을 준다. 로컬판은 src 파일을 바로 연다.
   const DOCKIND = {
-    lecsupp: { sec: "기출+강의록", hint: "강의록 여백에 그 슬라이드에서 나온 기출과 정답을 붙인 PDF", suffix: "기출+강의록",
+    lecture: { name: "강의록", suffix: "강의록", order: 0,
+      meta: function (d) { return d.kb ? "<span>" + (d.kb >= 1024 ? (d.kb / 1024).toFixed(1) + "MB" : d.kb + "KB") + "</span>" : ""; } },
+    lecsupp: { name: "기출 보완판", suffix: "기출 보완판", order: 1,
       meta: function (d) { return "<span>기출 " + d.n + "문항</span><span>강의록 " + d.pages + "쪽</span>"; } },
-    guide: { sec: "강의록 해설", hint: "슬라이드마다 그림과 해설을 단 PDF", suffix: "슬라이드 해설",
+    guide: { name: "슬라이드 해설", suffix: "슬라이드 해설", order: 2,
       meta: function (d) { return "<span>슬라이드 " + d.slides + "장</span><span>해설 " + d.pages + "쪽</span>"; } }
   };
   function docKind(d) { return DOCKIND[d.kind] || DOCKIND.lecsupp; }
@@ -1061,19 +1069,48 @@
       return d.subjectId === sid && (!kind || (d.kind || "lecsupp") === kind);
     });
   }
-  function docCard(d) {
-    return '<div class="card quiz-card doc">' +
-      '<div class="wk">' + esc(d.week + (d.prof ? " · " + d.prof : "")) + "</div>" +
-      '<div class="ttl">' + esc(d.title) + "</div>" +
-      '<div class="meta">' + docKind(d).meta(d) + "</div>" +
-      '<div class="row"><div></div><button class="btn small primary" data-act="doc" data-id="' + esc(d.id) + '">PDF 받기</button></div>' +
-    "</div>";
+  // 강의록 탭(2026-11-25 사용자 지시): 과목마다 주 차 카드 하나에 강의록 원본과, 있으면 같은 주 차의 기출 보완판·슬라이드 해설을
+  // 줄마다 받기 단추로 나란히 보인다("합친다는 게 파일 병합을 의미하는 건 아님"). 주 차 순서, 같은 주 차 안에서는 강의록 → 보완판 → 해설.
+  function lectureWeekCard(list) {
+    const lec = list.filter(function (d) { return d.kind === "lecture"; });
+    const head = lec[0] || list[0];
+    list = list.slice().sort(function (a, b) { return docKind(a).order - docKind(b).order; });
+    const rows = list.map(function (d) {
+      const k = docKind(d);
+      return '<div class="round">' +
+        '<div class="round-info"><b>' + esc(k.name) + "</b>" + (d.label ? '<span class="lab">' + esc(d.label) + "</span>" : "") +
+          '<span class="meta">' + k.meta(d) + "</span></div>" +
+        '<div class="round-btns"><button class="btn small' + (d.kind === "lecture" ? " primary" : "") + '" data-act="doc" data-id="' + esc(d.id) + '">PDF 받기</button></div>' +
+      "</div>";
+    }).join("");
+    return '<div class="card quiz-card group doc">' +
+      '<div class="wk">' + esc(head.week + (head.prof ? " · " + head.prof : "")) + "</div>" +
+      '<div class="ttl">' + esc(head.title) + "</div>" + rows + "</div>";
+  }
+  function renderLectures() {
+    setNav("lec");
+    ensureSelection();
+    const subj = SUBJ[settings.subject];
+    let html = "<h1>강의록</h1>" + pickerHTML();
+    if (subj) {
+      const byWeek = {}, weeks = [];
+      docsOf(subj.id).forEach(function (d) {
+        if (!byWeek[d.week]) { byWeek[d.week] = []; weeks.push(d.week); }
+        byWeek[d.week].push(d);
+      });
+      weeks.sort(function (a, b) { return (+(a.match(/\d+/) || [0])[0]) - (+(b.match(/\d+/) || [0])[0]); });
+      html += "<h2>" + esc(subj.name) + ' <span class="badge">' + esc(subj.grade + " " + subj.term) + "</span></h2>" +
+        '<p class="sub">강의 원본 PDF를 받습니다. 그 주차에 기출 보완판이나 슬라이드 해설이 있으면 같은 칸에 함께 있습니다.</p>' +
+        (weeks.length ? '<div class="quiz-grid">' + weeks.map(function (w) { return lectureWeekCard(byWeek[w]); }).join("") + "</div>"
+          : '<p class="empty">이 과목은 아직 올린 강의록이 없습니다.</p>');
+    }
+    setHTML(html);
   }
   function downloadDoc(id, btn) {
     const d = (window.QUIZ_DOCS || []).filter(function (x) { return x.id === id; })[0];
     if (!d) return;
     const subj = SUBJ[d.subjectId] ? SUBJ[d.subjectId].name + " " : "";
-    const name = subj + d.week + " " + d.title.replace(/\s*:\s*/g, " - ").replace(/[\\/*?"<>|]/g, "·") + " (" + docKind(d).suffix + ").pdf";
+    const name = koWeek(subj + d.week + " " + d.title.replace(/\s*:\s*/g, " - ").replace(/[\\/*?"<>|]/g, "·") + " (" + docKind(d).suffix + (d.label ? " · " + d.label.replace(/[\\/*?"<>|:]/g, "·") : "") + ").pdf");
     const label = btn.textContent;
     btn.disabled = true; btn.textContent = "받는 중…";
     const p = window.QUIZ_DOC ? window.QUIZ_DOC(d.id) : Promise.resolve(encodeURI(d.src));
@@ -1152,27 +1189,34 @@
     if (subj) {
       const lq = lectureQuizzes(subj.id), eq = examQuizzes(subj.id);
       html += "<h2>" + esc(subj.name) + ' <span class="badge">' + esc(subj.grade + " " + subj.term) + "</span></h2>";
-      // 받는 PDF는 과목 화면 맨 위, 종류별로 나눠 보인다(2026-10-27 · 종류 나누기 2026-11-11)
-      let firstSec = true;
-      ["lecsupp", "guide"].forEach(function (k) {
-        const dq = docsOf(subj.id, k);
-        if (!dq.length) return;
-        html += '<h3 class="sec"' + (firstSec ? ' style="margin-top:0"' : "") + ">" + esc(DOCKIND[k].sec) +
-          ' <span class="hint">' + esc(DOCKIND[k].hint) + "</span></h3>" +
-          '<div class="quiz-grid">' + dq.map(docCard).join("") + "</div>";
-        firstSec = false;
-      });
+      // 받는 PDF(기출+강의록·슬라이드 해설·강의 원본)는 2026-11-25부터 과목 화면이 아니라 '강의록' 탭(renderLectures)에 있다.
+      // 연습 문제(2026-11-25 사용자 지시 "중간고사 범위에 해당하는 예제 박스는 폴더로 숨겨서 기말에 집중"):
+      // 기말 범위 주 차와 기말 랜덤을 위에 펼쳐 두고, 중간 범위(과목 mixRanges의 "mid", 1~7주 차) 주 차와 중간 랜덤은
+      // 접힌 폴더(details#foldMid) 안에 둔다. 폴더를 연 상태는 이 브라우저에 기억한다(mq_fold_mid).
       if (lq.length) {
         const groups = [], byWeek = {};
         lq.forEach(function (qz) {
           if (!byWeek[qz.week]) { byWeek[qz.week] = []; groups.push(byWeek[qz.week]); }
           byWeek[qz.week].push(qz);
         });
-        if (!firstSec) html += '<h3 class="sec">연습 문제 <span class="hint">강의 주차별 문항</span></h3>';   // 위에 PDF 칸이 있으면 제목을 단다
-        html += '<div class="quiz-grid">' + groups.map(function (g) { return g.length > 1 ? weekGroupCard(g) : quizCard(g[0], g[0].questions.length); }).join("") +
-          (subj.mixRanges ? subj.mixRanges.map(function (r) { return "MIX:" + subj.id + ":" + r.key; }) : ["MIX:" + subj.id])
-            .map(function (id) { return { id: id, n: mixCount(id) }; }).filter(function (x) { return x.n > 0; })
-            .map(function (x) { return quizCard(quizMeta(x.id), Math.min(20, x.n)); }).join("") + "</div>";
+        const mid = (subj.mixRanges || []).filter(function (r) { return r.key === "mid"; })[0];
+        const isMid = function (g) { return !!mid && weekNum(g[0]) >= mid.from && weekNum(g[0]) <= mid.to; };
+        const card = function (g) { return g.length > 1 ? weekGroupCard(g) : quizCard(g[0], g[0].questions.length); };
+        const mixCards = function (ids) {
+          return ids.map(function (id) { return { id: id, n: mixCount(id) }; }).filter(function (x) { return x.n > 0; })
+            .map(function (x) { return quizCard(quizMeta(x.id), Math.min(20, x.n)); }).join("");
+        };
+        const mixIds = subj.mixRanges ? subj.mixRanges.map(function (r) { return "MIX:" + subj.id + ":" + r.key; }) : ["MIX:" + subj.id];
+        const midMix = mixIds.filter(function (id) { return /:mid$/.test(id); }), restMix = mixIds.filter(function (id) { return !/:mid$/.test(id); });
+        const fin = groups.filter(function (g) { return !isMid(g); }), md = groups.filter(isMid);
+        const finHTML = fin.map(card).join("") + mixCards(restMix);
+        html += '<h3 class="sec" style="margin-top:0">연습 문제 <span class="hint">강의 주차별 문항</span></h3>' +
+          (finHTML ? '<div class="quiz-grid">' + finHTML + "</div>" : '<p class="empty">기말고사 범위의 연습 문제는 아직 없습니다.</p>');
+        if (md.length) {
+          html += '<details class="fold" id="foldMid"' + (load("mq_fold_mid", false) ? " open" : "") + ">" +
+            '<summary><b>중간고사 범위</b><span class="hint">' + mid.from + "~" + mid.to + "주차 · " + md.length + "개 주차 · 랜덤 포함</span></summary>" +
+            '<div class="quiz-grid">' + md.map(card).join("") + mixCards(midMix) + "</div></details>";
+        }
       }
       if (eq.length) {
         html += '<h3 class="sec">기출 문제 <span class="hint">해설지 원고 기반 · 서술형·복기 실패 문항은 해설을 보고 스스로 채점</span></h3>' +
@@ -1194,6 +1238,8 @@
       "</div>";
 
     setHTML(html);
+    const fm = document.getElementById("foldMid");
+    if (fm) fm.addEventListener("toggle", function () { save("mq_fold_mid", fm.open); });
     if (locked) return;
     document.getElementById("importFile").onchange = importHistory;
   }
@@ -2034,12 +2080,12 @@
     const g = e.target.closest("[data-grade]");
     if (g && !g.disabled) {
       settings.grade = g.dataset.grade; settings.subject = null; ensureSelection();
-      return document.getElementById("navHistory").classList.contains("active") ? renderHistory() : renderHome();
+      return document.getElementById("navHistory").classList.contains("active") ? renderHistory() : document.getElementById("navLec").classList.contains("active") ? renderLectures() : renderHome();
     }
     const sb = e.target.closest("[data-subject]");
     if (sb && !sb.disabled) {
       settings.subject = sb.dataset.subject; saveSettings();
-      return document.getElementById("navHistory").classList.contains("active") ? renderHistory() : renderHome();
+      return document.getElementById("navHistory").classList.contains("active") ? renderHistory() : document.getElementById("navLec").classList.contains("active") ? renderLectures() : renderHome();
     }
     const b = e.target.closest("[data-act]");
     if (!b || b.disabled) return;
@@ -2090,6 +2136,7 @@
   document.getElementById("homeBtn").onclick = function () { renderHome(); };
   document.getElementById("navHome").onclick = function () { renderHome(); };
   document.getElementById("navHistory").onclick = function () { if (window.QUIZ_LOCKED) return askLogin(); renderHistory(); };
+  document.getElementById("navLec").onclick = function () { renderLectures(); };   // 로그인 전에도 목록은 보이고, 받기를 누르면 로그인 창
   // 로그인 전: 누르면 로그인 창(가입했지만 승인 전이면 승인 대기 안내)
   function askLogin() {
     if (!window.QuizAuth || !window.QuizAuth.enabled()) return;
@@ -2103,7 +2150,7 @@
     const im = document.getElementById("lbImg");
     im.removeAttribute("src");
     imgURL(src).then(function (u) { im.src = u; });
-    document.getElementById("lbCap").textContent = cap || "";
+    document.getElementById("lbCap").textContent = koWeek(cap || "");
     lb.hidden = false;
   }
   function closeLightbox() { lb.hidden = true; document.getElementById("lbImg").removeAttribute("src"); }

@@ -15,7 +15,7 @@
 <!-- 고른 글꼴을 그리기 전에 입힌다(app.js setupFont가 mq_font에 적어 둔다). 웹 글꼴은 그리기를 막지 않게 늦게 켠다 -->
 <script>try{var f=JSON.parse(localStorage.getItem("mq_font")||"null");if(f&&f.user){var r=document.documentElement;if(f.uiCss)r.style.setProperty("--font",f.uiCss);if(f.qCss)r.style.setProperty("--qfont",f.qCss);[f.uiUrl,f.qUrl].forEach(function(u){if(!u||document.querySelector('link[data-mqfont="'+u+'"]'))return;var l=document.createElement("link");l.rel="stylesheet";l.media="print";l.setAttribute("data-mqfont",u);l.href=u;l.onload=function(){this.media="all";};document.head.appendChild(l);});}}catch(e){}</script>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;700&display=swap" media="print" onload="this.media='all'" data-mqfont="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;700&display=swap">
-<link rel="stylesheet" href="style.css?v=ff27c37c35">
+<link rel="stylesheet" href="style.css?v=539ca482af">
 </head>
 <body>
 <header class="topbar">
@@ -25,6 +25,7 @@
   <nav class="topnav">
     <button type="button" id="syncChip" class="sync-chip" hidden>동기화</button>
     <button type="button" id="navHome" class="navbtn">과목 선택</button>
+    <button type="button" id="navLec" class="navbtn">강의록</button>
     <button type="button" id="navHistory" class="navbtn">기록</button>
   </nav>
 </header>
@@ -42,7 +43,7 @@
 <script src="config.js?v=b3ff7ef4fc"></script>
 <script src="auth.js?v=c1eea384dd"></script>
 <script src="boot.js?v=779be1f5b2"></script>
-<script src="app.js?v=46f2beda62"></script>
-<script src="print.js?v=e57fc369a8"></script>
+<script src="app.js?v=089d46ef88"></script>
+<script src="print.js?v=6124cb0ddf"></script>
 </body>
 </html>
